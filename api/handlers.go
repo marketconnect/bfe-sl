@@ -197,7 +197,9 @@ func (h *Handler) ListUsersHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve users", "details": err.Error()})
 		return
 	}
-
+	if users == nil {
+		users = []models.User{}
+	}
 	c.JSON(http.StatusOK, users)
 }
 
