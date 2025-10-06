@@ -4,21 +4,22 @@ import "time"
 
 type User struct {
 	ID           uint64           `json:"id"`
-	CreatedAt    time.Time        `json:"createdAt"`
-	UpdatedAt    time.Time        `json:"updatedAt"`
+	CreatedAt    *time.Time       `json:"createdAt"`
+	UpdatedAt    *time.Time       `json:"updatedAt"`
 	Username     string           `json:"username"`
-	Alias        string           `json:"alias,omitempty"`
+	Alias        *string          `json:"alias,omitempty"`
+	VersionCheck string           `json:"-"`
 	PasswordHash string           `json:"-"`
 	IsAdmin      bool             `json:"isAdmin"`
 	Permissions  []UserPermission `json:"permissions"`
 }
 
 type UserPermission struct {
-	ID           uint64    `json:"id"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	UserID       uint64    `json:"userId"`
-	FolderPrefix string    `json:"folderPrefix"`
+	ID           uint64     `json:"id"`
+	CreatedAt    *time.Time `json:"createdAt"`
+	UpdatedAt    *time.Time `json:"updatedAt"`
+	UserID       uint64     `json:"userId"`
+	FolderPrefix *string    `json:"folderPrefix"`
 }
 
 type LoginRequest struct {
@@ -82,8 +83,8 @@ type ArchiveJob struct {
 	ID           uint64    `json:"id"`
 	UserID       uint64    `json:"userId"`
 	Status       string    `json:"status"` // PENDING, PROCESSING, COMPLETED, FAILED
-	ArchiveKey   string    `json:"archiveKey,omitempty"`
-	ErrorMessage string    `json:"errorMessage,omitempty"`
+	ArchiveKey   *string   `json:"archiveKey,omitempty"`
+	ErrorMessage *string   `json:"errorMessage,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 }

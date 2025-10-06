@@ -74,9 +74,14 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 		return
 	}
 
+	var aliasPtr *string
+	if req.Alias != "" {
+		aliasPtr = &req.Alias
+	}
+
 	user := &models.User{
 		Username:     req.Username,
-		Alias:        req.Alias,
+		Alias:        aliasPtr,
 		PasswordHash: string(hashedPassword),
 		IsAdmin:      req.IsAdmin,
 	}
@@ -240,7 +245,7 @@ func (h *Handler) AssignPermissionHandler(c *gin.Context) {
 
 	perm := &models.UserPermission{
 		UserID:       req.UserID,
-		FolderPrefix: req.FolderPrefix,
+		FolderPrefix: &req.FolderPrefix,
 	}
 
 	if err := h.Store.AssignPermission(c.Request.Context(), perm); err != nil {
@@ -301,7 +306,7 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 	if requestedPath == "" || requestedPath == "/" {
 		var rootFolders []string
 		for _, p := range permissions {
-			rootFolders = append(rootFolders, p.FolderPrefix)
+			rootFolders = append(rootFolders, *p.FolderPrefix)
 		}
 		c.JSON(http.StatusOK, models.ListFilesResponse{
 			Path:    "/",
@@ -317,7 +322,7 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 
 	isAllowed := false
 	for _, p := range permissions {
-		if strings.HasPrefix(requestedPath, p.FolderPrefix) {
+		if strings.HasPrefix(requestedPath, *p.FolderPrefix) {
 			isAllowed = true
 			break
 		}
@@ -449,7 +454,7 @@ func (h *Handler) GenerateUploadURLHandler(c *gin.Context) {
 
 	isAllowed := false
 	for _, p := range permissions {
-		if strings.HasPrefix(uploadPath, p.FolderPrefix) {
+		if strings.HasPrefix(uploadPath, *p.FolderPrefix) {
 			isAllowed = true
 			break
 		}
@@ -498,7 +503,7 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 
 	isAllowed := func(path string) bool {
 		for _, p := range permissions {
-			if strings.HasPrefix(path, p.FolderPrefix) {
+			if strings.HasPrefix(path, *p.FolderPrefix) {
 				return true
 			}
 		}
@@ -596,11 +601,11 @@ func (h *Handler) GetArchiveStatusHandler(c *gin.Context) {
 	response := models.GetArchiveStatusResponse{
 		JobID:  job.ID,
 		Status: job.Status,
-		Error:  job.ErrorMessage,
+		Error:  *job.ErrorMessage,
 	}
 
 	if job.Status == "COMPLETED" {
-		url, err := h.S3Client.GeneratePresignedURL(job.ArchiveKey, 1*time.Hour)
+		url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, 1*time.Hour)
 		if err != nil {
 			log.Printf("Failed to generate presigned URL for completed archive %s: %v", job.ArchiveKey, err)
 			// Don't fail the whole request, just omit the URL

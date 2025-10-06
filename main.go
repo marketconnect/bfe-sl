@@ -13,6 +13,8 @@ import (
 	"github.com/marketconnect/bfe-sl/models"
 	"github.com/marketconnect/bfe-sl/s3"
 	"golang.org/x/crypto/bcrypt"
+
+	_ "github.com/ydb-platform/ydb-go-sdk/v3/table"
 )
 
 var (
@@ -33,9 +35,9 @@ func init() {
 	}
 	// defer ydbDriver.Close(ctx) // ВАЖНО: Не закрывайте драйвер в init(), он должен жить все время работы экземпляра функции.
 
-	if err := db.CreateTables(ctx, ydbDriver); err != nil {
-		log.Fatalf("Failed to initialize database schema: %v", err)
-	}
+	// if err := db.CreateTables(ctx, ydbDriver); err != nil {
+	// 	log.Fatalf("Failed to initialize database schema: %v", err)
+	// }
 
 	store := &db.YdbStore{Driver: ydbDriver}
 
@@ -123,7 +125,7 @@ func seedAdminUser(ctx context.Context, store db.Store, cfg *config.Config) {
 		log.Fatalf("Failed to hash admin password: %v", err)
 	}
 
-	admin := &models.User{Username: cfg.AdminUser, PasswordHash: string(hashedPassword), IsAdmin: true}
+	admin := &models.User{Username: cfg.AdminUser, PasswordHash: string(hashedPassword), IsAdmin: true, Alias: nil}
 	if err := store.CreateUser(ctx, admin); err != nil {
 		log.Fatalf("Failed to create admin user: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"time"
 
@@ -38,8 +39,6 @@ type YdbStore struct {
 }
 
 func newID() (uint64, error) {
-	// Generate a random uint64, this is simple and good enough for this case.
-	// For production, consider more robust UUID schemes.
 	val, err := rand.Int(rand.Reader, new(big.Int).SetUint64(^uint64(0)))
 	if err != nil {
 		return 0, err
@@ -48,7 +47,10 @@ func newID() (uint64, error) {
 }
 
 func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
+	log.Printf("DEBUG: GetUserByUsername called for user: '%s'", username)
+
 	var user models.User
+	_ = user.VersionCheck
 	var found bool
 
 	query := `
@@ -69,22 +71,33 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 		defer res.Close()
 
 		if res.NextResultSet(ctx) && res.NextRow() {
+			log.Println("DEBUG: User found in DB. Attempting to scan values using res.Scan()...")
 			found = true
-			return res.ScanNamed(
-				named.Required("id", &user.ID),
-				named.Required("created_at", &user.CreatedAt),
-				named.Required("updated_at", &user.UpdatedAt),
-				named.Required("username", &user.Username),
-				named.Optional("alias", &user.Alias),
-				named.Required("password_hash", &user.PasswordHash),
-				named.Required("is_admin", &user.IsAdmin),
+			// Используем res.Scan() вместо res.ScanNamed()
+			// Порядок важен и должен соответствовать SELECT
+			err := res.Scan(
+				&user.ID,
+				&user.CreatedAt,
+				&user.UpdatedAt,
+				&user.Username,
+				&user.Alias, // &user.Alias здесь имеет тип **string, что является правильным для сканирования nullable-значения в указатель
+				&user.PasswordHash,
+				&user.IsAdmin,
 			)
+			if err != nil {
+				log.Printf("DEBUG: res.Scan FAILED with error: %v", err)
+				return fmt.Errorf("scan failed: %w", err)
+			}
+			log.Println("DEBUG: res.Scan successful.")
+		} else {
+			log.Println("DEBUG: User not found in result set.")
 		}
-		return nil
+		return res.Err()
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("ydb query failed: %w", err)
+		log.Printf("DEBUG: The entire YDB 'Do' block failed with error: %v", err)
+		return nil, fmt.Errorf("ydb query failed in GetUserByUsername: %w", err)
 	}
 	if !found {
 		return nil, ErrNotFound
@@ -122,21 +135,24 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 
 		if res.NextResultSet(ctx) && res.NextRow() {
 			found = true
-			return res.ScanNamed(
+			err := res.ScanNamed(
 				named.Required("id", &user.ID),
-				named.Required("created_at", &user.CreatedAt),
-				named.Required("updated_at", &user.UpdatedAt),
+				named.Optional("created_at", &user.CreatedAt),
+				named.Optional("updated_at", &user.UpdatedAt),
 				named.Required("username", &user.Username),
 				named.Optional("alias", &user.Alias),
 				named.Required("password_hash", &user.PasswordHash),
 				named.Required("is_admin", &user.IsAdmin),
 			)
+			if err != nil {
+				return fmt.Errorf("scan failed: %w", err)
+			}
 		}
-		return nil
+		return res.Err()
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("ydb query failed: %w", err)
+		return nil, fmt.Errorf("ydb query failed in GetUserByID: %w", err)
 	}
 	if !found {
 		return nil, ErrNotFound
@@ -157,7 +173,7 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 	query := `
 		DECLARE $user_id AS Uint64;
 		SELECT id, created_at, updated_at, user_id, folder_prefix
-		FROM user_permissions VIEW user_id_index
+		FROM user_permissions
 		WHERE user_id = $user_id;
 	`
 	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
@@ -174,15 +190,15 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 		for res.NextResultSet(ctx) {
 			for res.NextRow() {
 				var p models.UserPermission
-				err = res.ScanNamed(
-					named.Required("id", &p.ID),
-					named.Required("created_at", &p.CreatedAt),
-					named.Required("updated_at", &p.UpdatedAt),
-					named.Required("user_id", &p.UserID),
-					named.Required("folder_prefix", &p.FolderPrefix),
+				err = res.Scan(
+					&p.ID,
+					&p.CreatedAt,
+					&p.UpdatedAt,
+					&p.UserID,
+					&p.FolderPrefix,
 				)
 				if err != nil {
-					return err
+					return fmt.Errorf("scan failed for permission: %w", err)
 				}
 				permissions = append(permissions, p)
 			}
@@ -191,10 +207,102 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("ydb query failed: %w", err)
+		return nil, fmt.Errorf("ydb query failed in GetUserPermissions: %w", err)
 	}
 
 	return permissions, nil
+}
+
+func (s *YdbStore) GetAllUsers(ctx context.Context) ([]models.User, error) {
+	var users []models.User
+
+	query := `
+		SELECT id, created_at, updated_at, username, alias, is_admin
+		FROM users
+		WHERE is_admin = false;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query, nil)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for res.NextResultSet(ctx) {
+			for res.NextRow() {
+				var u models.User
+				err = res.ScanNamed(
+					named.Required("id", &u.ID),
+					named.Optional("created_at", &u.CreatedAt),
+					named.Optional("updated_at", &u.UpdatedAt),
+					named.Required("username", &u.Username),
+					named.Optional("alias", &u.Alias),
+					named.Required("is_admin", &u.IsAdmin),
+				)
+				if err != nil {
+					return err
+				}
+
+				permissions, err := s.GetUserPermissions(ctx, u.ID)
+				if err != nil {
+					return err
+				}
+				u.Permissions = permissions
+				users = append(users, u)
+			}
+		}
+		return res.Err()
+	})
+
+	return users, err
+}
+
+func (s *YdbStore) GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error) {
+	var job models.ArchiveJob
+	var found bool
+
+	query := `
+		DECLARE $id AS Uint64;
+		SELECT id, user_id, status, archive_key, error_message, created_at, updated_at
+		FROM archive_jobs
+		WHERE id = $id;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$id", types.Uint64Value(jobID)),
+			),
+		)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		if res.NextResultSet(ctx) && res.NextRow() {
+			found = true
+			err := res.Scan(
+				&job.ID,
+				&job.UserID,
+				&job.Status,
+				&job.ArchiveKey,
+				&job.ErrorMessage,
+				&job.CreatedAt,
+				&job.UpdatedAt,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return res.Err()
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("ydb query failed: %w", err)
+	}
+	if !found {
+		return nil, ErrNotFound
+	}
+	return &job, nil
 }
 
 func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
@@ -210,7 +318,7 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 		DECLARE $created_at AS Timestamp;
 		DECLARE $updated_at AS Timestamp;
 		DECLARE $username AS Utf8;
-		DECLARE $alias AS Utf8;
+		DECLARE $alias AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 
@@ -222,10 +330,10 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(user.ID)),
-				table.ValueParam("$created_at", types.TimestampValue(uint64(ts.UnixMicro()))),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(ts.UnixMicro()))),
+				table.ValueParam("$created_at", types.TimestampValueFromTime(ts)),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 				table.ValueParam("$username", types.UTF8Value(user.Username)),
-				table.ValueParam("$alias", types.UTF8Value(user.Alias)),
+				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 			),
@@ -235,14 +343,15 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 }
 
 func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
-	user.UpdatedAt = time.Now()
+	now := time.Now()
+	user.UpdatedAt = &now
 
 	query := `
 		DECLARE $id AS Uint64;
-		DECLARE $created_at AS Timestamp;
-		DECLARE $updated_at AS Timestamp;
+		DECLARE $created_at AS Optional<Timestamp>;
+		DECLARE $updated_at AS Optional<Timestamp>;
 		DECLARE $username AS Utf8;
-		DECLARE $alias AS Utf8;
+		DECLARE $alias AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 
@@ -253,10 +362,10 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(user.ID)),
-				table.ValueParam("$created_at", types.TimestampValue(uint64(user.CreatedAt.UnixMicro()))),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(user.UpdatedAt.UnixMicro()))),
+				table.ValueParam("$created_at", types.NullableTimestampValueFromTime(user.CreatedAt)),
+				table.ValueParam("$updated_at", types.NullableTimestampValueFromTime(user.UpdatedAt)),
 				table.ValueParam("$username", types.UTF8Value(user.Username)),
-				table.ValueParam("$alias", types.UTF8Value(user.Alias)),
+				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 			),
@@ -281,7 +390,7 @@ func (s *YdbStore) UpdateUserPassword(ctx context.Context, userID uint64, passwo
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(userID)),
 				table.ValueParam("$password_hash", types.UTF8Value(passwordHash)),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(ts.UnixMicro()))),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)
 		return err
@@ -296,7 +405,12 @@ func (s *YdbStore) DeleteUser(ctx context.Context, userID uint64) error {
 		DELETE FROM users WHERE id = $user_id;
 	`
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, _, err := session.Execute(ctx, table.SerializableReadWriteTxControl(), query,
+		// Используем TxControl с явным Begin и Commit для гарантии сохранения изменений.
+		txControl := table.TxControl(
+			table.BeginTx(table.WithSerializableReadWrite()),
+			table.CommitTx(),
+		)
+		_, _, err := session.Execute(ctx, txControl, query,
 			table.NewQueryParameters(
 				table.ValueParam("$user_id", types.Uint64Value(userID)),
 			),
@@ -327,10 +441,10 @@ func (s *YdbStore) AssignPermission(ctx context.Context, permission *models.User
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(permission.ID)),
-				table.ValueParam("$created_at", types.TimestampValue(uint64(ts.UnixMicro()))),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(ts.UnixMicro()))),
+				table.ValueParam("$created_at", types.TimestampValueFromTime(ts)),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 				table.ValueParam("$user_id", types.Uint64Value(permission.UserID)),
-				table.ValueParam("$folder_prefix", types.UTF8Value(permission.FolderPrefix)),
+				table.ValueParam("$folder_prefix", types.UTF8Value(*permission.FolderPrefix)),
 			),
 		)
 		return err
@@ -350,53 +464,6 @@ func (s *YdbStore) RevokePermission(ctx context.Context, permissionID uint64) er
 		)
 		return err
 	})
-}
-
-func (s *YdbStore) GetAllUsers(ctx context.Context) ([]models.User, error) {
-	// This can be inefficient on large datasets.
-	// In a real app, pagination would be required.
-	var users []models.User
-
-	query := `
-		SELECT id, created_at, updated_at, username, alias, is_admin
-		FROM users
-		WHERE is_admin = false;
-	`
-	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query, nil)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-
-		for res.NextResultSet(ctx) {
-			for res.NextRow() {
-				var u models.User
-				err = res.ScanNamed(
-					named.Required("id", &u.ID),
-					named.Required("created_at", &u.CreatedAt),
-					named.Required("updated_at", &u.UpdatedAt),
-					named.Required("username", &u.Username),
-					named.Optional("alias", &u.Alias),
-					named.Required("is_admin", &u.IsAdmin),
-				)
-				if err != nil {
-					return err
-				}
-				// This is an N+1 query pattern. For high performance, it would be better
-				// to fetch all permissions in a separate query and map them in memory.
-				permissions, err := s.GetUserPermissions(ctx, u.ID)
-				if err != nil {
-					return err
-				}
-				u.Permissions = permissions
-				users = append(users, u)
-			}
-		}
-		return res.Err()
-	})
-
-	return users, err
 }
 
 func (s *YdbStore) CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error {
@@ -425,57 +492,12 @@ func (s *YdbStore) CreateArchiveJob(ctx context.Context, job *models.ArchiveJob)
 				table.ValueParam("$id", types.Uint64Value(job.ID)),
 				table.ValueParam("$user_id", types.Uint64Value(job.UserID)),
 				table.ValueParam("$status", types.UTF8Value(job.Status)),
-				table.ValueParam("$created_at", types.TimestampValue(uint64(ts.UnixMicro()))),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(ts.UnixMicro()))),
+				table.ValueParam("$created_at", types.TimestampValueFromTime(ts)),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)
 		return err
 	})
-}
-
-func (s *YdbStore) GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error) {
-	var job models.ArchiveJob
-	var found bool
-
-	query := `
-		DECLARE $id AS Uint64;
-		SELECT id, user_id, status, archive_key, error_message, created_at, updated_at
-		FROM archive_jobs
-		WHERE id = $id;
-	`
-	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
-			table.NewQueryParameters(
-				table.ValueParam("$id", types.Uint64Value(jobID)),
-			),
-		)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-
-		if res.NextResultSet(ctx) && res.NextRow() {
-			found = true
-			return res.ScanNamed(
-				named.Required("id", &job.ID),
-				named.Required("user_id", &job.UserID),
-				named.Required("status", &job.Status),
-				named.Optional("archive_key", &job.ArchiveKey),
-				named.Optional("error_message", &job.ErrorMessage),
-				named.Required("created_at", &job.CreatedAt),
-				named.Required("updated_at", &job.UpdatedAt),
-			)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("ydb query failed: %w", err)
-	}
-	if !found {
-		return nil, ErrNotFound
-	}
-	return &job, nil
 }
 
 func (s *YdbStore) UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error {
@@ -496,9 +518,9 @@ func (s *YdbStore) UpdateArchiveJobStatus(ctx context.Context, jobID uint64, sta
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(jobID)),
 				table.ValueParam("$status", types.UTF8Value(status)),
-				table.ValueParam("$archive_key", types.UTF8Value(archiveKey)),
-				table.ValueParam("$error_message", types.UTF8Value(errorMessage)),
-				table.ValueParam("$updated_at", types.TimestampValue(uint64(ts.UnixMicro()))),
+				table.ValueParam("$archive_key", types.NullableUTF8Value(&archiveKey)),
+				table.ValueParam("$error_message", types.NullableUTF8Value(&errorMessage)),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)
 		return err
