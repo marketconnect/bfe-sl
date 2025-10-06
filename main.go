@@ -4,6 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -34,7 +37,7 @@ func init() {
 
 	s3Client := s3.NewClient(cfg)
 
-	seedAdminUser(ctx, store, cfg)
+	// seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
 		Store:     store,
@@ -42,21 +45,48 @@ func init() {
 		JwtSecret: cfg.JWTSecretKey,
 	}
 
-	router = gin.Default()
+	router = gin.New()
+
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
 
 	router.SetTrustedProxies(nil)
 
-	corsConfig := cors.DefaultConfig()
+	corsConfig := cors.Config{
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}
 
-	corsConfig.AllowOrigins = []string{cfg.OriginURL}
+	origins := strings.Split(cfg.OriginURL, ",")
+	for i := range origins {
+		origins[i] = strings.TrimRight(strings.TrimSpace(origins[i]), "/")
+	}
+	corsConfig.AllowOriginFunc = func(origin string) bool {
+		o := strings.TrimRight(origin, "/")
+		for _, allowed := range origins {
+			if o == allowed {
+				return true
+			}
+			u1, err1 := url.Parse(o)
+			u2, err2 := url.Parse(allowed)
+			if err1 == nil && err2 == nil && u1.Host == u2.Host {
+				return true
+			}
+		}
+		return false
+	}
 
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Authorization"}
 	router.Use(cors.New(corsConfig))
 
 	apiV1 := router.Group("/api/v1")
 	{
 		authGroup := apiV1.Group("/auth")
 		authGroup.POST("/login", handler.LoginHandler)
+		authGroup.OPTIONS("/login", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
 
 		authedRoutes := apiV1.Group("/")
 		authedRoutes.Use(api.AuthMiddleware(cfg.JWTSecretKey))
@@ -82,20 +112,8 @@ func init() {
 	}
 }
 
-// Handler - это точка входа для Yandex Cloud Function.
-// Все HTTP-запросы, поступающие от API Gateway, будут попадать сюда.
 func Handler(w http.ResponseWriter, r *http.Request) {
 	router.ServeHTTP(w, r)
-}
-
-// Эта функция main останется для удобства локального тестирования.
-// В среде Yandex Cloud Functions она вызываться не будет.
-func main() {
-	log.Println("Starting local server for development on :8080")
-	// ИСПРАВЛЕНИЕ: Оборачиваем Handler в http.HandlerFunc
-	if err := http.ListenAndServe(":8080", http.HandlerFunc(Handler)); err != nil {
-		log.Fatalf("Failed to run local server: %v", err)
-	}
 }
 
 func seedAdminUser(ctx context.Context, store db.Store, cfg *config.Config) {
