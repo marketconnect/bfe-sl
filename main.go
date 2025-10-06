@@ -21,27 +21,17 @@ var (
 	router *gin.Engine
 )
 
-// init() выполняется один раз при "холодном старте" экземпляра функции.
-// Это идеальное место для инициализации тяжелых объектов: подключения к БД, S3-клиента и роутера.
 func init() {
 	ctx := context.Background()
 	cfg := config.Load()
 
-	// Инициализация YDB
-	// В облаке аутентификация произойдет автоматически через сервисный аккаунт функции.
 	ydbDriver, err := db.InitYDB(ctx, cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to YDB: %v", err)
 	}
-	// defer ydbDriver.Close(ctx) // ВАЖНО: Не закрывайте драйвер в init(), он должен жить все время работы экземпляра функции.
-
-	// if err := db.CreateTables(ctx, ydbDriver); err != nil {
-	// 	log.Fatalf("Failed to initialize database schema: %v", err)
-	// }
 
 	store := &db.YdbStore{Driver: ydbDriver}
 
-	// Инициализация S3 клиента
 	s3Client := s3.NewClient(cfg)
 
 	seedAdminUser(ctx, store, cfg)
@@ -57,8 +47,9 @@ func init() {
 	router.SetTrustedProxies(nil)
 
 	corsConfig := cors.DefaultConfig()
-	// Для тестирования можно разрешить все источники или указать конкретные
-	corsConfig.AllowAllOrigins = true
+
+	corsConfig.AllowOrigins = []string{cfg.OriginURL}
+
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Authorization"}
 	router.Use(cors.New(corsConfig))
 

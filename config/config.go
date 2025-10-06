@@ -19,6 +19,7 @@ type Config struct {
 	S3SecretAccessKey string
 	AdminUser         string
 	AdminPassword     string
+	OriginURL         string
 }
 
 func Load() *Config {
@@ -38,6 +39,7 @@ func Load() *Config {
 		S3SecretAccessKey: getEnv("S3_SECRET_ACCESS_KEY", ""),
 		AdminUser:         getEnv("ADMIN_USER", "admin"),
 		AdminPassword:     getEnv("ADMIN_PASSWORD", ""),
+		OriginURL:         getEnv("ORIGIN_URL", "http://localhost:8080"),
 	}
 }
 
