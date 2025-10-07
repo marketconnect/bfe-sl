@@ -23,9 +23,10 @@ import (
 )
 
 type Handler struct {
-	Store     db.Store
-	S3Client  *s3.Client
-	JwtSecret string
+	Store      db.Store
+	S3Client   *s3.Client
+	JwtSecret  string
+	PreSignTTL time.Duration
 }
 
 // Auth Handlers
@@ -285,6 +286,81 @@ func (h *Handler) ListAllFoldersHandler(c *gin.Context) {
 }
 
 // User Handlers
+// func (h *Handler) ListFilesHandler(c *gin.Context) {
+// 	userIDVal, exists := c.Get("userID")
+// 	if !exists {
+// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+// 		return
+// 	}
+// 	userID := userIDVal.(uint64)
+
+// 	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
+// 	if err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
+// 		return
+// 	}
+
+// 	if len(permissions) == 0 {
+// 		c.JSON(http.StatusOK, models.ListFilesResponse{Path: "/", Folders: []string{}, Files: []models.FileWithURL{}})
+// 		return
+// 	}
+
+// 	requestedPath := c.Query("path")
+// 	if requestedPath == "" || requestedPath == "/" {
+// 		var rootFolders []string
+// 		for _, p := range permissions {
+// 			rootFolders = append(rootFolders, *p.FolderPrefix)
+// 		}
+// 		c.JSON(http.StatusOK, models.ListFilesResponse{
+// 			Path:    "/",
+// 			Folders: rootFolders,
+// 			Files:   []models.FileWithURL{},
+// 		})
+// 		return
+// 	}
+
+// 	if !strings.HasSuffix(requestedPath, "/") {
+// 		requestedPath += "/"
+// 	}
+
+// 	isAllowed := false
+// 	for _, p := range permissions {
+// 		if strings.HasPrefix(requestedPath, *p.FolderPrefix) {
+// 			isAllowed = true
+// 			break
+// 		}
+// 	}
+
+// 	if !isAllowed {
+// 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+// 		return
+// 	}
+
+// 	listOutput, err := h.S3Client.ListObjects(requestedPath, "/")
+// 	if err != nil {
+// 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
+// 		return
+// 	}
+
+// 	var filesWithURLs []models.FileWithURL
+// 	for _, key := range listOutput.Files {
+// 		url, err := h.S3Client.GeneratePresignedURL(key, 1*time.Hour)
+// 		if err != nil {
+// 			log.Printf("Error generating presigned url for key %s: %v", key, err)
+// 			continue
+// 		}
+// 		filesWithURLs = append(filesWithURLs, models.FileWithURL{Key: key, URL: url})
+// 	}
+
+// 	response := models.ListFilesResponse{
+// 		Path:    requestedPath,
+// 		Folders: listOutput.Folders,
+// 		Files:   filesWithURLs,
+// 	}
+
+// 	c.JSON(http.StatusOK, response)
+// }
+
 func (h *Handler) ListFilesHandler(c *gin.Context) {
 	userIDVal, exists := c.Get("userID")
 	if !exists {
@@ -300,7 +376,11 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 	}
 
 	if len(permissions) == 0 {
-		c.JSON(http.StatusOK, models.ListFilesResponse{Path: "/", Folders: []string{}, Files: []models.FileWithURL{}})
+		c.JSON(http.StatusOK, models.ListFilesResponse{
+			Path:    "/",
+			Folders: []string{},
+			Files:   []models.FileWithURL{},
+		})
 		return
 	}
 
@@ -308,7 +388,9 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 	if requestedPath == "" || requestedPath == "/" {
 		var rootFolders []string
 		for _, p := range permissions {
-			rootFolders = append(rootFolders, *p.FolderPrefix)
+			if p.FolderPrefix != nil {
+				rootFolders = append(rootFolders, *p.FolderPrefix)
+			}
 		}
 		c.JSON(http.StatusOK, models.ListFilesResponse{
 			Path:    "/",
@@ -324,12 +406,11 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 
 	isAllowed := false
 	for _, p := range permissions {
-		if strings.HasPrefix(requestedPath, *p.FolderPrefix) {
+		if p.FolderPrefix != nil && strings.HasPrefix(requestedPath, *p.FolderPrefix) {
 			isAllowed = true
 			break
 		}
 	}
-
 	if !isAllowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
@@ -341,23 +422,17 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 		return
 	}
 
-	var filesWithURLs []models.FileWithURL
+	// Возвращаем только ключи; url оставляем пустым — фронт получит свежий через /files/presign
+	files := make([]models.FileWithURL, 0, len(listOutput.Files))
 	for _, key := range listOutput.Files {
-		url, err := h.S3Client.GeneratePresignedURL(key, 1*time.Hour)
-		if err != nil {
-			log.Printf("Error generating presigned url for key %s: %v", key, err)
-			continue
-		}
-		filesWithURLs = append(filesWithURLs, models.FileWithURL{Key: key, URL: url})
+		files = append(files, models.FileWithURL{Key: key})
 	}
 
-	response := models.ListFilesResponse{
+	c.JSON(http.StatusOK, models.ListFilesResponse{
 		Path:    requestedPath,
 		Folders: listOutput.Folders,
-		Files:   filesWithURLs,
-	}
-
-	c.JSON(http.StatusOK, response)
+		Files:   files,
+	})
 }
 
 func (h *Handler) createArchiveAsync(ctx context.Context, job *models.ArchiveJob, req models.ArchiveRequest) {
@@ -607,9 +682,11 @@ func (h *Handler) GetArchiveStatusHandler(c *gin.Context) {
 	}
 
 	if job.Status == "COMPLETED" {
-		url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, 1*time.Hour)
+
+		url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, h.PreSignTTL)
+		// url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, 30*time.Second)
 		if err != nil {
-			log.Printf("Failed to generate presigned URL for completed archive %s: %v", job.ArchiveKey, err)
+			log.Printf("Failed to generate presigned URL for completed archive %s: %v", *job.ArchiveKey, err)
 			// Don't fail the whole request, just omit the URL
 		} else {
 			response.DownloadURL = url
@@ -617,4 +694,46 @@ func (h *Handler) GetArchiveStatusHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) PresignFileHandler(c *gin.Context) {
+	userIDVal, ok := c.Get("userID")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID := userIDVal.(uint64)
+
+	key := c.Query("key")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing key"})
+		return
+	}
+
+	// Проверяем доступ так же, как в ListFilesHandler
+	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
+		return
+	}
+	allowed := false
+	for _, p := range permissions {
+		if p.FolderPrefix != nil && strings.HasPrefix(key, *p.FolderPrefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	u, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTL)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to presign url", "details": err.Error()})
+		return
+	}
+
+	// Отдаём JSON {"url": "..."} (фронт завернёт через /s3proxy)
+	c.JSON(http.StatusOK, gin.H{"url": u})
 }

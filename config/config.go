@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -20,6 +21,7 @@ type Config struct {
 	AdminUser         string
 	AdminPassword     string
 	OriginURL         string
+	PresignTTLSeconds int
 }
 
 func Load() *Config {
@@ -40,6 +42,7 @@ func Load() *Config {
 		AdminUser:         getEnv("ADMIN_USER", "admin"),
 		AdminPassword:     getEnv("ADMIN_PASSWORD", ""),
 		OriginURL:         getEnv("ORIGIN_URL", "http://localhost:8080"),
+		PresignTTLSeconds: getEnvInt("PRESIGN_TTL_SECONDS", 45, 10, 3600),
 	}
 }
 
@@ -49,6 +52,29 @@ func getEnv(key, fallback string) string {
 	}
 	if fallback == "" {
 		log.Fatalf("FATAL: Environment variable %s is not set.", key)
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback, min, max int) int {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < min {
+				return min
+			}
+			if n > max {
+				return max
+			}
+			return n
+		}
+		log.Printf("WARN: %s=%q is not an integer, using default %d", key, v, fallback)
+	}
+
+	if fallback < min {
+		return min
+	}
+	if fallback > max {
+		return max
 	}
 	return fallback
 }
