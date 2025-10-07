@@ -168,6 +168,9 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 }
 
 func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]models.UserPermission, error) {
+
+	log.Printf("DEBUG: GetUserPermissions called for userID: %d", userID)
+
 	var permissions []models.UserPermission
 
 	query := `
@@ -188,7 +191,9 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 		defer res.Close()
 
 		for res.NextResultSet(ctx) {
+
 			for res.NextRow() {
+				log.Println("DEBUG: Found a permission row, scanning...")
 				var p models.UserPermission
 				err = res.Scan(
 					&p.ID,
@@ -198,15 +203,19 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 					&p.FolderPrefix,
 				)
 				if err != nil {
+					log.Printf("DEBUG: Scan failed for permission row: %v", err)
 					return fmt.Errorf("scan failed for permission: %w", err)
 				}
+
 				permissions = append(permissions, p)
 			}
 		}
+		log.Printf("DEBUG: Finished scanning. Total permissions found: %d", len(permissions))
 		return res.Err()
 	})
 
 	if err != nil {
+		log.Printf("DEBUG: GetUserPermissions 'Do' block failed with error: %v", err)
 		return nil, fmt.Errorf("ydb query failed in GetUserPermissions: %w", err)
 	}
 

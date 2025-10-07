@@ -3,7 +3,7 @@ package models
 import "time"
 
 type User struct {
-	ID           uint64           `json:"id"`
+	ID           uint64           `json:"id,string"`
 	CreatedAt    *time.Time       `json:"createdAt"`
 	UpdatedAt    *time.Time       `json:"updatedAt"`
 	Username     string           `json:"username"`
@@ -15,10 +15,10 @@ type User struct {
 }
 
 type UserPermission struct {
-	ID           uint64     `json:"id"`
+	ID           uint64     `json:"id,string"`
 	CreatedAt    *time.Time `json:"createdAt"`
 	UpdatedAt    *time.Time `json:"updatedAt"`
-	UserID       uint64     `json:"userId"`
+	UserID       uint64     `json:"userId,string"`
 	FolderPrefix *string    `json:"folderPrefix"`
 }
 
@@ -46,7 +46,7 @@ type CreateUserRequest struct {
 }
 
 type AssignPermissionRequest struct {
-	UserID       uint64 `json:"user_id" binding:"required"`
+	UserID       uint64 `json:"user_id,string" binding:"required"`
 	FolderPrefix string `json:"folder_prefix" binding:"required"`
 }
 
@@ -80,8 +80,8 @@ type GenerateUploadURLResponse struct {
 }
 
 type ArchiveJob struct {
-	ID           uint64    `json:"id"`
-	UserID       uint64    `json:"userId"`
+	ID           uint64    `json:"id,string"`
+	UserID       uint64    `json:"userId,string"`
 	Status       string    `json:"status"` // PENDING, PROCESSING, COMPLETED, FAILED
 	ArchiveKey   *string   `json:"archiveKey,omitempty"`
 	ErrorMessage *string   `json:"errorMessage,omitempty"`
@@ -90,12 +90,12 @@ type ArchiveJob struct {
 }
 
 type RequestArchiveResponse struct {
-	JobID  uint64 `json:"jobId"`
+	JobID  uint64 `json:"jobId,string"`
 	Status string `json:"status"`
 }
 
 type GetArchiveStatusResponse struct {
-	JobID       uint64 `json:"jobId"`
+	JobID       uint64 `json:"jobId,string"`
 	Status      string `json:"status"`
 	DownloadURL string `json:"downloadUrl,omitempty"`
 	Error       string `json:"error,omitempty"`

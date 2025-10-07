@@ -1,3 +1,3 @@
 zip:
 	rm function.zip
-	zip function.zip -r .
+	zip -r function.zip . -x 'patch.diff' '*/patch.diff' '.git/*' '*/.git/*' 'git/*' '*/git/*'
