@@ -93,6 +93,7 @@ func init() {
 		{
 			authedRoutes.GET("/files", handler.ListFilesHandler)
 			authedRoutes.POST("/files/generate-upload-url", handler.GenerateUploadURLHandler)
+			authedRoutes.POST("/archive", handler.DownloadArchiveHandler)
 			authedRoutes.GET("/archive/status/:jobId", handler.GetArchiveStatusHandler)
 
 			adminRoutes := authedRoutes.Group("/admin")
