@@ -119,28 +119,35 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	router.ServeHTTP(w, r)
 }
 
-func main() {
-	// This main function is for local development testing and will not be used in the Yandex Cloud Function environment.
-	log.Println("Starting local server for development on :8080")
-	if err := http.ListenAndServe(":8080", router); err != nil {
-		log.Fatalf("Failed to run local server: %v", err)
-	}
-}
-
 func seedAdminUser(ctx context.Context, store db.Store, cfg *config.Config) {
 	if cfg.AdminPassword == "" {
 		log.Println("ADMIN_PASSWORD is not set, skipping admin user seeding.")
 		return
 	}
 
-	_, err := store.GetUserByID(ctx, 1)
-	if err == nil {
-		log.Println("Super admin user (ID=1) already exists.")
-		return
+	// Check if a user with the admin username already exists.
+	existingUser, err := store.GetUserByUsername(ctx, cfg.AdminUser)
+	if err != nil && err != db.ErrNotFound {
+		log.Fatalf("Failed to check for admin user by username: %v", err)
 	}
 
-	if err != db.ErrNotFound {
-		log.Fatalf("Failed to check for super admin user: %v", err)
+	// If a user with that name exists...
+	if existingUser != nil {
+		// ...and it's our super admin (ID=1), then our job is done.
+		if existingUser.ID == 1 {
+			log.Println("Super admin user (ID=1) with the correct username already exists.")
+			return
+		}
+		// ...but it's some other user, this is a critical conflict.
+		log.Fatalf("FATAL: A user with the admin username '%s' already exists but is not ID=1.", cfg.AdminUser)
+	}
+	// Now, check if ID=1 is taken by someone else (edge case).
+	userByID, err := store.GetUserByID(ctx, 1)
+	if err != nil && err != db.ErrNotFound {
+		log.Fatalf("Failed to check for user with ID=1: %v", err)
+	}
+	if userByID != nil {
+		log.Fatalf("FATAL: A user with ID=1 already exists but has a different username ('%s').", userByID.Username)
 	}
 
 	log.Println("Super admin user not found, creating...")

@@ -1,6 +1,6 @@
 module github.com/marketconnect/bfe-sl
 
-go 1.23
+// go 1.23
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.26.1
