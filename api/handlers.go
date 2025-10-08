@@ -69,6 +69,31 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 		return
 	}
 
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Super admin (ID=1) can create admins.
+	// Regular admins can only create regular users.
+	if adminID != 1 && req.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only super admin can create other admins"})
+		return
+	}
+
+	// Check for username uniqueness
+	existingUser, err := h.Store.GetUserByUsername(c.Request.Context(), req.Username)
+	if err != nil && err != db.ErrNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error while checking username"})
+		return
+	}
+	if existingUser != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "username is already taken"})
+		return
+	}
+
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
@@ -85,10 +110,29 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 		Alias:        aliasPtr,
 		PasswordHash: string(hashedPassword),
 		IsAdmin:      req.IsAdmin,
+		CreatedBy:    &adminID,
 	}
 
 	if err := h.Store.CreateUser(c.Request.Context(), user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create user", "details": err.Error()})
+		return
+	}
+
+	folderPath := fmt.Sprintf("%d/", user.ID)
+
+	if err := h.S3Client.CreateFolder(folderPath); err != nil {
+		log.Printf("CRITICAL: User %d created, but failed to create S3 folder '%s': %v. Manual intervention required.", user.ID, folderPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "user created, but failed to create s3 folder", "details": err.Error()})
+		return
+	}
+	perm := &models.UserPermission{
+		UserID:       user.ID,
+		FolderPrefix: &folderPath,
+	}
+
+	if err := h.Store.AssignPermission(c.Request.Context(), perm); err != nil {
+		log.Printf("CRITICAL: User %d and folder '%s' created, but failed to assign permission: %v. Manual intervention required.", user.ID, folderPath, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "user and folder created, but failed to assign permission", "details": err.Error()})
 		return
 	}
 
@@ -157,6 +201,27 @@ func (h *Handler) ResetUserPasswordHandler(c *gin.Context) {
 		return
 	}
 
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Super admin can reset anyone's password.
+	// Regular admins can only reset passwords of users they created.
+	if adminID != 1 {
+		userToReset, err := h.Store.GetUserByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve user to reset password", "details": err.Error()})
+			return
+		}
+		if userToReset.CreatedBy == nil || *userToReset.CreatedBy != adminID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only reset passwords for users you created"})
+			return
+		}
+	}
+
 	var req models.ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
@@ -184,6 +249,23 @@ func (h *Handler) CreateFolderHandler(c *gin.Context) {
 		return
 	}
 
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Super admin can create folders anywhere.
+	// Regular admins can only create folders inside their own root folder.
+	if adminID != 1 {
+		adminRootFolder := fmt.Sprintf("%d/", adminID)
+		if !strings.HasPrefix(req.FolderPath, adminRootFolder) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only create folders inside your own root folder"})
+			return
+		}
+	}
+
 	if err := h.S3Client.CreateFolder(req.FolderPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create folder", "details": err.Error()})
 		return
@@ -193,7 +275,14 @@ func (h *Handler) CreateFolderHandler(c *gin.Context) {
 }
 
 func (h *Handler) ListUsersHandler(c *gin.Context) {
-	users, err := h.Store.GetAllUsers(c.Request.Context())
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	users, err := h.Store.GetAllUsers(c.Request.Context(), adminID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve users", "details": err.Error()})
 		return
@@ -212,6 +301,27 @@ func (h *Handler) DeleteUserHandler(c *gin.Context) {
 		return
 	}
 
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Super admin can delete anyone.
+	// Regular admins can only delete users they created.
+	if adminID != 1 {
+		userToDelete, err := h.Store.GetUserByID(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve user to delete", "details": err.Error()})
+			return
+		}
+		if userToDelete.CreatedBy == nil || *userToDelete.CreatedBy != adminID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only delete users you created"})
+			return
+		}
+	}
+
 	if err := h.Store.DeleteUser(c.Request.Context(), userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user", "details": err.Error()})
 		return
@@ -225,6 +335,35 @@ func (h *Handler) AssignPermissionHandler(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
 		return
+	}
+
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Super admin can assign any permission.
+	// Regular admins can only assign permissions to users they created, and only for subfolders of their own root folder.
+	if adminID != 1 {
+		// Check if target user was created by this admin
+		targetUser, err := h.Store.GetUserByID(c.Request.Context(), req.UserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve target user", "details": err.Error()})
+			return
+		}
+		if targetUser.CreatedBy == nil || *targetUser.CreatedBy != adminID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only assign permissions to users you created"})
+			return
+		}
+
+		// Check if folder is within admin's root folder
+		adminRootFolder := fmt.Sprintf("%d/", adminID)
+		if !strings.HasPrefix(req.FolderPrefix, adminRootFolder) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only assign permissions to subfolders of your own root folder"})
+			return
+		}
 	}
 
 	allFolders, err := h.S3Client.ListAllFolders()
@@ -276,90 +415,34 @@ func (h *Handler) RevokePermissionHandler(c *gin.Context) {
 }
 
 func (h *Handler) ListAllFoldersHandler(c *gin.Context) {
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
 	folders, err := h.S3Client.ListAllFolders()
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list folders from storage service", "details": err.Error()})
 		return
 	}
 
+	// Super admin sees all folders.
+	// Regular admins see only folders inside their own root folder.
+	if adminID != 1 {
+		adminRootFolder := fmt.Sprintf("%d/", adminID)
+		var adminFolders []string
+		for _, folder := range folders {
+			if strings.HasPrefix(folder, adminRootFolder) {
+				adminFolders = append(adminFolders, folder)
+			}
+		}
+		folders = adminFolders
+	}
+
 	c.JSON(http.StatusOK, gin.H{"folders": folders})
 }
-
-// User Handlers
-// func (h *Handler) ListFilesHandler(c *gin.Context) {
-// 	userIDVal, exists := c.Get("userID")
-// 	if !exists {
-// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-// 		return
-// 	}
-// 	userID := userIDVal.(uint64)
-
-// 	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
-// 	if err != nil {
-// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
-// 		return
-// 	}
-
-// 	if len(permissions) == 0 {
-// 		c.JSON(http.StatusOK, models.ListFilesResponse{Path: "/", Folders: []string{}, Files: []models.FileWithURL{}})
-// 		return
-// 	}
-
-// 	requestedPath := c.Query("path")
-// 	if requestedPath == "" || requestedPath == "/" {
-// 		var rootFolders []string
-// 		for _, p := range permissions {
-// 			rootFolders = append(rootFolders, *p.FolderPrefix)
-// 		}
-// 		c.JSON(http.StatusOK, models.ListFilesResponse{
-// 			Path:    "/",
-// 			Folders: rootFolders,
-// 			Files:   []models.FileWithURL{},
-// 		})
-// 		return
-// 	}
-
-// 	if !strings.HasSuffix(requestedPath, "/") {
-// 		requestedPath += "/"
-// 	}
-
-// 	isAllowed := false
-// 	for _, p := range permissions {
-// 		if strings.HasPrefix(requestedPath, *p.FolderPrefix) {
-// 			isAllowed = true
-// 			break
-// 		}
-// 	}
-
-// 	if !isAllowed {
-// 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
-// 		return
-// 	}
-
-// 	listOutput, err := h.S3Client.ListObjects(requestedPath, "/")
-// 	if err != nil {
-// 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
-// 		return
-// 	}
-
-// 	var filesWithURLs []models.FileWithURL
-// 	for _, key := range listOutput.Files {
-// 		url, err := h.S3Client.GeneratePresignedURL(key, 1*time.Hour)
-// 		if err != nil {
-// 			log.Printf("Error generating presigned url for key %s: %v", key, err)
-// 			continue
-// 		}
-// 		filesWithURLs = append(filesWithURLs, models.FileWithURL{Key: key, URL: url})
-// 	}
-
-// 	response := models.ListFilesResponse{
-// 		Path:    requestedPath,
-// 		Folders: listOutput.Folders,
-// 		Files:   filesWithURLs,
-// 	}
-
-// 	c.JSON(http.StatusOK, response)
-// }
 
 func (h *Handler) ListFilesHandler(c *gin.Context) {
 	userIDVal, exists := c.Get("userID")

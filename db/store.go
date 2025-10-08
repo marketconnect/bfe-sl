@@ -24,7 +24,7 @@ type Store interface {
 	DeleteUser(ctx context.Context, userID uint64) error
 	GetUserByID(ctx context.Context, userID uint64) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
-	GetAllUsers(ctx context.Context) ([]models.User, error)
+	GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error)
 	AssignPermission(ctx context.Context, permission *models.UserPermission) error
 	UpdateUserPassword(ctx context.Context, userID uint64, passwordHash string) error
 	RevokePermission(ctx context.Context, permissionID uint64) error
@@ -55,7 +55,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 
 	query := `
 		DECLARE $username AS Utf8;
-		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin
+		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin, created_by
 		FROM users
 		WHERE username = $username;
 	`
@@ -83,6 +83,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 				&user.Alias, // &user.Alias здесь имеет тип **string, что является правильным для сканирования nullable-значения в указатель
 				&user.PasswordHash,
 				&user.IsAdmin,
+				&user.CreatedBy,
 			)
 			if err != nil {
 				log.Printf("DEBUG: res.Scan FAILED with error: %v", err)
@@ -118,7 +119,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 
 	query := `
 		DECLARE $id AS Uint64;
-		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin
+		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin, created_by
 		FROM users
 		WHERE id = $id;
 	`
@@ -143,6 +144,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 				named.Optional("alias", &user.Alias),
 				named.Required("password_hash", &user.PasswordHash),
 				named.Required("is_admin", &user.IsAdmin),
+				named.Optional("created_by", &user.CreatedBy),
 			)
 			if err != nil {
 				return fmt.Errorf("scan failed: %w", err)
@@ -222,16 +224,32 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 	return permissions, nil
 }
 
-func (s *YdbStore) GetAllUsers(ctx context.Context) ([]models.User, error) {
+func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error) {
 	var users []models.User
 
-	query := `
-		SELECT id, created_at, updated_at, username, alias, is_admin
-		FROM users
-		WHERE is_admin = false;
-	`
+	var query string
+	var params *table.QueryParameters
+
+	if adminID == 1 { // Super admin
+		query = `
+			SELECT id, created_at, updated_at, username, alias, is_admin, created_by
+			FROM users;
+		`
+		params = table.NewQueryParameters()
+	} else { // Regular admin
+		query = `
+			DECLARE $created_by AS Uint64;
+			SELECT id, created_at, updated_at, username, alias, is_admin, created_by
+			FROM users
+			WHERE created_by = $created_by;
+		`
+		params = table.NewQueryParameters(
+			table.ValueParam("$created_by", types.Uint64Value(adminID)),
+		)
+	}
+
 	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query, nil)
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query, params)
 		if err != nil {
 			return err
 		}
@@ -247,6 +265,7 @@ func (s *YdbStore) GetAllUsers(ctx context.Context) ([]models.User, error) {
 					named.Required("username", &u.Username),
 					named.Optional("alias", &u.Alias),
 					named.Required("is_admin", &u.IsAdmin),
+					named.Optional("created_by", &u.CreatedBy),
 				)
 				if err != nil {
 					return err
@@ -315,11 +334,13 @@ func (s *YdbStore) GetArchiveJob(ctx context.Context, jobID uint64) (*models.Arc
 }
 
 func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
-	id, err := newID()
-	if err != nil {
-		return err
+	if user.ID == 0 {
+		id, err := newID()
+		if err != nil {
+			return err
+		}
+		user.ID = id
 	}
-	user.ID = id
 	ts := time.Now()
 
 	query := `
@@ -330,9 +351,10 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 		DECLARE $alias AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
+		DECLARE $created_by AS Optional<Uint64>;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin, created_by)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin, $created_by);
 	`
 
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
@@ -345,6 +367,7 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
+				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
 			),
 		)
 		return err
@@ -363,9 +386,10 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 		DECLARE $alias AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
+		DECLARE $created_by AS Optional<Uint64>;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin, created_by)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin, $created_by);
 	`
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
@@ -377,6 +401,7 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
+				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
 			),
 		)
 		return err

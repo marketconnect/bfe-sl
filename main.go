@@ -37,7 +37,7 @@ func init() {
 
 	s3Client := s3.NewClient(cfg)
 
-	// seedAdminUser(ctx, store, cfg)
+	seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
 		Store:      store,
@@ -119,25 +119,37 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	router.ServeHTTP(w, r)
 }
 
+func main() {
+	// This main function is for local development testing and will not be used in the Yandex Cloud Function environment.
+	log.Println("Starting local server for development on :8080")
+	if err := http.ListenAndServe(":8080", router); err != nil {
+		log.Fatalf("Failed to run local server: %v", err)
+	}
+}
+
 func seedAdminUser(ctx context.Context, store db.Store, cfg *config.Config) {
 	if cfg.AdminPassword == "" {
 		log.Println("ADMIN_PASSWORD is not set, skipping admin user seeding.")
 		return
 	}
 
-	_, err := store.GetUserByUsername(ctx, cfg.AdminUser)
+	_, err := store.GetUserByID(ctx, 1)
 	if err == nil {
-		log.Println("Admin user already exists.")
+		log.Println("Super admin user (ID=1) already exists.")
 		return
 	}
 
-	log.Println("Admin user not found, creating...")
+	if err != db.ErrNotFound {
+		log.Fatalf("Failed to check for super admin user: %v", err)
+	}
+
+	log.Println("Super admin user not found, creating...")
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(cfg.AdminPassword), bcrypt.DefaultCost)
 	if err != nil {
 		log.Fatalf("Failed to hash admin password: %v", err)
 	}
 
-	admin := &models.User{Username: cfg.AdminUser, PasswordHash: string(hashedPassword), IsAdmin: true, Alias: nil}
+	admin := &models.User{ID: 1, Username: cfg.AdminUser, PasswordHash: string(hashedPassword), IsAdmin: true, Alias: nil}
 	if err := store.CreateUser(ctx, admin); err != nil {
 		log.Fatalf("Failed to create admin user: %v", err)
 	}

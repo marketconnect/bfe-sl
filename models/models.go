@@ -12,6 +12,7 @@ type User struct {
 	PasswordHash string           `json:"-"`
 	IsAdmin      bool             `json:"isAdmin"`
 	Permissions  []UserPermission `json:"permissions"`
+	CreatedBy    *uint64          `json:"createdBy,string,omitempty"`
 }
 
 type UserPermission struct {

@@ -6,6 +6,7 @@ CREATE TABLE users (
     alias Utf8,
     password_hash Utf8 NOT NULL,
     is_admin Bool NOT NULL,
+    created_by Uint64,
     PRIMARY KEY (id),
     INDEX username_index GLOBAL ON (username)
 );
