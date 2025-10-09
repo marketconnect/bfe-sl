@@ -271,18 +271,23 @@ func (h *Handler) CreateFolderHandler(c *gin.Context) {
 		return
 	}
 	adminID := adminIDVal.(uint64)
-
+	folderPath := req.FolderPath
 	// Super admin can create folders anywhere.
 	// Regular admins can only create folders inside their own root folder.
 	if adminID != 1 {
 		adminRootFolder := fmt.Sprintf("%d/", adminID)
-		if !strings.HasPrefix(req.FolderPath, adminRootFolder) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only create folders inside your own root folder"})
-			return
+		if !strings.HasPrefix(folderPath, adminRootFolder) {
+			// Disallow absolute paths from regular admins.
+			if strings.HasPrefix(folderPath, "/") {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only create folders inside your own root folder"})
+				return
+			}
+			// Prepend the admin's root folder to the path.
+			folderPath = adminRootFolder + folderPath
 		}
 	}
 
-	if err := h.S3Client.CreateFolder(req.FolderPath); err != nil {
+	if err := h.S3Client.CreateFolder(folderPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create folder", "details": err.Error()})
 		return
 	}
