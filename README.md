@@ -50,3 +50,41 @@ ORIGIN_URL="http://localhost:3000,https://your-frontend-domain.com"
 
 # Presigned URL Time-to-Live
 PRESIGN_TTL_SECONDS=300
+
+
+Curl Example:
+```
+curl -X POST   -H "Content-Type: application/json"   -H "Authorization: Bearer $TOKEN"   -d '{"username": "testuser", "password": "password123", "is_admin": false}'   "$GATEWAY_URL/api/v1/admin/users"
+
+export USER_ID=15101886788856559465
+
+curl -X POST   -H "Content-Type: application/json"   -H "Authorization: Bearer $TOKEN"   -d '{"user_id": '$USER_ID', "folder_prefix": "test-folder/"}'   "$GATEWAY_URL/api/v1/admin/permissions"
+
+TESTUSER_TOKEN=$(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"username": "testuser", "password": "password123"}' \
+  "$GATEWAY_URL/api/v1/auth/login" | jq -r .token)
+
+echo "Токен для testuser: $TESTUSER_TOKEN"
+
+
+UPLOAD_DATA=$(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TESTUSER_TOKEN" \
+  -d '{"fileName": "example.txt", "contentType": "text/plain", "prefix": "test-folder/"}' \
+  "$GATEWAY_URL/api/v1/files/generate-upload-url")
+
+echo "Ответ от API:"
+
+echo $UPLOAD_DATA
+
+UPLOAD_URL=$(echo $UPLOAD_DATA | jq -r .uploadUrl)
+
+OBJECT_KEY=$(echo $UPLOAD_DATA | jq -r .objectKey)
+
+
+echo "Hello, Yandex Cloud!" > example.txt
+
+
+curl -X PUT   -H "Content-Type: text/plain"   --data-binary "@example.txt"   "$UPLOAD_URL"
+```

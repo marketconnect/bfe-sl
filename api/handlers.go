@@ -295,6 +295,73 @@ func (h *Handler) CreateFolderHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "folder created successfully"})
 }
 
+func (h *Handler) DeleteStorageItemsHandler(c *gin.Context) {
+	var req models.DeleteItemsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// --- Authorization Check ---
+	if adminID != 1 {
+		adminRootFolder := fmt.Sprintf("%d/", adminID)
+		for _, key := range req.Keys {
+			if !strings.HasPrefix(key, adminRootFolder) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only delete items inside your own root folder", "item": key})
+				return
+			}
+		}
+		for _, folder := range req.Folders {
+			if !strings.HasPrefix(folder, adminRootFolder) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only delete items inside your own root folder", "item": folder})
+				return
+			}
+		}
+	}
+	// --- End Authorization Check ---
+
+	keysToDelete := make(map[string]struct{})
+
+	for _, key := range req.Keys {
+		keysToDelete[key] = struct{}{}
+	}
+
+	for _, folder := range req.Folders {
+		if !strings.HasSuffix(folder, "/") {
+			folder += "/"
+		}
+
+		objects, err := h.S3Client.ListAllObjects(folder)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list objects in folder for deletion", "folder": folder, "details": err.Error()})
+			return
+		}
+		for _, objKey := range objects {
+			keysToDelete[objKey] = struct{}{}
+		}
+		keysToDelete[folder] = struct{}{}
+	}
+
+	var keySlice []string
+	for k := range keysToDelete {
+		keySlice = append(keySlice, k)
+	}
+
+	if err := h.S3Client.DeleteObjects(keySlice); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete one or more items from storage", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "items deleted successfully"})
+}
+
 func (h *Handler) ListUsersHandler(c *gin.Context) {
 	adminIDVal, exists := c.Get("userID")
 	if !exists {

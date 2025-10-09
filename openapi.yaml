@@ -1,4 +1,5 @@
 openapi: 3.1.0
+
 info:
   title: BFE-SL File Management API
   description: |-
@@ -14,7 +15,33 @@ servers:
 tags:
   - name: Authentication
     description: User login and token generation
-  - name: File Management
+  - n      CreateFolderRequest:
+        type: object
+        required: [folderPath]
+        properties:
+          folderPath:
+            type: string
+            description: The full path for the new folder, ending with a '/'.
+            example: "123/new_folder/"
+
+      DeleteItemsRequest:
+        type: object
+        required: [keys, folders]
+        properties:
+          keys:
+            type: array
+            description: A list of file paths to delete
+            items:
+              type: string
+            example: ["123/documents/report.docx", "123/archive.zip"]
+          folders:
+            type: array
+            description: A list of folder paths to delete (recursive)
+            items:
+              type: string
+            example: ["123/old_images/", "456/temp/"]
+
+      GenerateUploadURLRequest:Management
     description: Operations for authenticated users to manage files and folders
   - name: Admin - User Management
     description: Admin-only endpoints for creating and managing users
@@ -449,6 +476,66 @@ paths:
           '500':
             $ref: '#/components/responses/InternalServerError'
 
+    /admin/storage/items:
+      delete:
+        tags:
+          - Admin - Storage Management
+        summary: Delete files and folders
+        description: |-
+          Deletes specified files and/or folders. Folder deletion is recursive.
+          - **Super Admin:** Can delete any item at any path.
+          - **Admin:** Can only delete items within their own root directory.
+          The operation is atomic; if any single item fails to delete, the process stops and an error is returned.
+        security:
+          - BearerAuth: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteItemsRequest'
+        responses:
+          '200':
+            $ref: '#/components/responses/SuccessMessage'
+          '400':
+            $ref: '#/components/responses/BadRequest'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '500':
+            $ref: '#/components/responses/InternalServerError'
+
+    /admin/storage/items:
+      delete:
+        tags:
+          - Admin - Storage Management
+        summary: Delete files and folders
+        description: |-
+          Deletes specified files and/or folders. Folder deletion is recursive.
+          - **Super Admin:** Can delete any item at any path.
+          - **Admin:** Can only delete items within their own root directory.
+          The operation is atomic; if any single item fails to delete, the process stops and an error is returned.
+        security:
+          - BearerAuth: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteItemsRequest'
+        responses:
+          '200':
+            $ref: '#/components/responses/SuccessMessage'
+          '400':
+            $ref: '#/components/responses/BadRequest'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '500':
+            $ref: '#/components/responses/InternalServerError'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -574,6 +661,22 @@ components:
             type: string
             description: The full path for the new folder, ending with a '/'.
             example: "123/new_folder/"
+
+      DeleteItemsRequest:
+        type: object
+        properties:
+          keys:
+            type: array
+            items:
+              type: string
+            description: A list of full file keys to delete.
+            example: ["123/documents/report.docx", "123/archive.zip"]
+          folders:
+            type: array
+            items:
+              type: string
+            description: A list of folder prefixes to delete recursively.
+            example: ["123/old_images/", "456/temp/"]
 
       GenerateUploadURLRequest:
         type: object

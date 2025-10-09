@@ -110,6 +110,7 @@ func init() {
 				adminRoutes.DELETE("/permissions/:id", handler.RevokePermissionHandler)
 				adminRoutes.GET("/storage/folders", handler.ListAllFoldersHandler)
 				adminRoutes.POST("/storage/folders", handler.CreateFolderHandler)
+				adminRoutes.DELETE("/storage/items", handler.DeleteStorageItemsHandler)
 			}
 		}
 	}

@@ -104,3 +104,8 @@ type GetArchiveStatusResponse struct {
 	DownloadURL string `json:"downloadUrl,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
+
+type DeleteItemsRequest struct {
+	Keys    []string `json:"keys"`
+	Folders []string `json:"folders"`
+}

@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	appconfig "github.com/marketconnect/bfe-sl/config"
 )
@@ -211,4 +213,41 @@ func (c *Client) UploadObject(objectKey string, data io.Reader) error {
 		Body:   data,
 	})
 	return err
+}
+
+func (c *Client) DeleteObjects(keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	var objectIdentifiers []types.ObjectIdentifier
+	for _, key := range keys {
+		objectIdentifiers = append(objectIdentifiers, types.ObjectIdentifier{Key: aws.String(key)})
+	}
+
+	// S3 DeleteObjects can handle up to 1000 keys per request.
+	// For simplicity, we'll handle this in a single batch.
+	// A more robust solution would chunk this for lists > 1000.
+	input := &s3.DeleteObjectsInput{
+		Bucket: &c.BucketName,
+		Delete: &types.Delete{
+			Objects: objectIdentifiers,
+			Quiet:   aws.Bool(false), // We want to know about errors
+		},
+	}
+
+	result, err := c.S3Client.DeleteObjects(context.TODO(), input)
+	if err != nil {
+		return err
+	}
+
+	if len(result.Errors) > 0 {
+		var errorStrings []string
+		for _, e := range result.Errors {
+			errorStrings = append(errorStrings, fmt.Sprintf("key %s: %s", *e.Key, *e.Message))
+		}
+		return fmt.Errorf("failed to delete some objects: %s", strings.Join(errorStrings, ", "))
+	}
+
+	return nil
 }
