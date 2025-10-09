@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -28,13 +29,23 @@ func Load() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
 	}
+	s3Endpoint := getEnv("S3_ENDPOINT", "https://storage.yandexcloud.net")
+	// If the env var is set but is an empty string, it will override the default.
+	// We must fall back to the default in that case to prevent errors.
+	if s3Endpoint == "" {
+		s3Endpoint = "https://storage.yandexcloud.net"
+	}
+	if !strings.HasPrefix(s3Endpoint, "http://") && !strings.HasPrefix(s3Endpoint, "https://") {
+		s3Endpoint = "https://" + s3Endpoint
+		log.Printf("WARN: S3_ENDPOINT was missing a protocol scheme. Prepending 'https://'. New endpoint: %s", s3Endpoint)
+	}
 
 	return &Config{
 		ServerPort:        getEnv("SERVER_PORT", "8080"),
 		YDBEndpoint:       getEnv("YDB_ENDPOINT", ""),
 		YDBDatabasePath:   getEnv("YDB_DATABASE_PATH", ""),
 		JWTSecretKey:      getEnv("JWT_SECRET_KEY", ""),
-		S3Endpoint:        getEnv("S3_ENDPOINT", "https://storage.yandexcloud.net"),
+		S3Endpoint:        s3Endpoint,
 		S3Region:          getEnv("S3_REGION", "ru-central1"),
 		S3BucketName:      getEnv("S3_BUCKET_NAME", ""),
 		S3AccessKeyID:     getEnv("S3_ACCESS_KEY_ID", ""),

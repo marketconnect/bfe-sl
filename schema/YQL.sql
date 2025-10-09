@@ -4,6 +4,7 @@ CREATE TABLE users (
     updated_at Timestamp,
     username Utf8 NOT NULL,
     alias Utf8,
+    email Utf8,
     password_hash Utf8 NOT NULL,
     is_admin Bool NOT NULL,
     created_by Uint64,

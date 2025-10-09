@@ -8,6 +8,7 @@ type User struct {
 	UpdatedAt    *time.Time       `json:"updatedAt"`
 	Username     string           `json:"username"`
 	Alias        *string          `json:"alias,omitempty"`
+	Email        *string          `json:"email,omitempty"`
 	VersionCheck string           `json:"-"`
 	PasswordHash string           `json:"-"`
 	IsAdmin      bool             `json:"isAdmin"`
@@ -43,6 +44,7 @@ type CreateUserRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 	Alias    string `json:"alias"`
+	Email    string `json:"email"`
 	IsAdmin  bool   `json:"is_admin"`
 }
 
@@ -56,8 +58,9 @@ type ResetPasswordRequest struct {
 }
 
 type UpdateAdminRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string  `json:"username"`
+	Password string  `json:"password"`
+	Email    *string `json:"email"`
 }
 
 type ArchiveRequest struct {

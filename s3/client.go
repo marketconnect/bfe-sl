@@ -30,7 +30,8 @@ type ListObjectsOutput struct {
 func NewClient(appCfg *appconfig.Config) *Client {
 	resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		return aws.Endpoint{
-			URL: appCfg.S3Endpoint,
+			URL:    appCfg.S3Endpoint,
+			Source: aws.EndpointSourceCustom,
 		}, nil
 	})
 

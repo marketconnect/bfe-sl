@@ -105,9 +105,15 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 		aliasPtr = &req.Alias
 	}
 
+	var emailPtr *string
+	if req.Email != "" {
+		emailPtr = &req.Email
+	}
+
 	user := &models.User{
 		Username:     req.Username,
 		Alias:        aliasPtr,
+		Email:        emailPtr,
 		PasswordHash: string(hashedPassword),
 		IsAdmin:      req.IsAdmin,
 		CreatedBy:    &adminID,
@@ -118,22 +124,24 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 		return
 	}
 
-	folderPath := fmt.Sprintf("%d/", user.ID)
+	if user.IsAdmin {
+		folderPath := fmt.Sprintf("%d/", user.ID)
 
-	if err := h.S3Client.CreateFolder(folderPath); err != nil {
-		log.Printf("CRITICAL: User %d created, but failed to create S3 folder '%s': %v. Manual intervention required.", user.ID, folderPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "user created, but failed to create s3 folder", "details": err.Error()})
-		return
-	}
-	perm := &models.UserPermission{
-		UserID:       user.ID,
-		FolderPrefix: &folderPath,
-	}
+		if err := h.S3Client.CreateFolder(folderPath); err != nil {
+			log.Printf("CRITICAL: User %d created, but failed to create S3 folder '%s': %v. Manual intervention required.", user.ID, folderPath, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "user created, but failed to create s3 folder", "details": err.Error()})
+			return
+		}
+		perm := &models.UserPermission{
+			UserID:       user.ID,
+			FolderPrefix: &folderPath,
+		}
 
-	if err := h.Store.AssignPermission(c.Request.Context(), perm); err != nil {
-		log.Printf("CRITICAL: User %d and folder '%s' created, but failed to assign permission: %v. Manual intervention required.", user.ID, folderPath, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "user and folder created, but failed to assign permission", "details": err.Error()})
-		return
+		if err := h.Store.AssignPermission(c.Request.Context(), perm); err != nil {
+			log.Printf("CRITICAL: User %d and folder '%s' created, but failed to assign permission: %v. Manual intervention required.", user.ID, folderPath, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "user and folder created, but failed to assign permission", "details": err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"message": "user created successfully", "user_id": user.ID, "password": req.Password})
@@ -183,6 +191,14 @@ func (h *Handler) UpdateAdminSelfHandler(c *gin.Context) {
 			return
 		}
 		adminUser.PasswordHash = string(hashedPassword)
+	}
+
+	if req.Email != nil {
+		if *req.Email == "" {
+			adminUser.Email = nil
+		} else {
+			adminUser.Email = req.Email
+		}
 	}
 
 	if err := h.Store.UpdateUser(c.Request.Context(), adminUser); err != nil {
@@ -467,8 +483,32 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 		return
 	}
 
+	isAdminVal, _ := c.Get("isAdmin")
+	isAdmin := isAdminVal.(bool)
+
 	requestedPath := c.Query("path")
 	if requestedPath == "" || requestedPath == "/" {
+		// Regular admin (not superadmin) sees the content of their own root folder
+		if isAdmin && userID != 1 {
+			adminRootFolder := fmt.Sprintf("%d/", userID)
+			listOutput, err := h.S3Client.ListObjects(adminRootFolder, "/")
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
+				return
+			}
+			files := make([]models.FileWithURL, 0, len(listOutput.Files))
+			for _, key := range listOutput.Files {
+				files = append(files, models.FileWithURL{Key: key})
+			}
+			c.JSON(http.StatusOK, models.ListFilesResponse{
+				Path:    "/", // Path is still root
+				Folders: listOutput.Folders,
+				Files:   files,
+			})
+			return
+		}
+
+		// Superadmin and regular users see their assigned root folders
 		var rootFolders []string
 		for _, p := range permissions {
 			if p.FolderPrefix != nil {

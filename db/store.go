@@ -55,7 +55,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 
 	query := `
 		DECLARE $username AS Utf8;
-		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin, created_by
+		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by
 		FROM users
 		WHERE username = $username;
 	`
@@ -81,6 +81,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 				&user.UpdatedAt,
 				&user.Username,
 				&user.Alias, // &user.Alias здесь имеет тип **string, что является правильным для сканирования nullable-значения в указатель
+				&user.Email,
 				&user.PasswordHash,
 				&user.IsAdmin,
 				&user.CreatedBy,
@@ -119,7 +120,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 
 	query := `
 		DECLARE $id AS Uint64;
-		SELECT id, created_at, updated_at, username, alias, password_hash, is_admin, created_by
+		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by
 		FROM users
 		WHERE id = $id;
 	`
@@ -142,6 +143,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 				named.Optional("updated_at", &user.UpdatedAt),
 				named.Required("username", &user.Username),
 				named.Optional("alias", &user.Alias),
+				named.Optional("email", &user.Email),
 				named.Required("password_hash", &user.PasswordHash),
 				named.Required("is_admin", &user.IsAdmin),
 				named.Optional("created_by", &user.CreatedBy),
@@ -232,14 +234,14 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 
 	if adminID == 1 { // Super admin
 		query = `
-			SELECT id, created_at, updated_at, username, alias, is_admin, created_by
+			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by
 			FROM users;
 		`
 		params = table.NewQueryParameters()
 	} else { // Regular admin
 		query = `
 			DECLARE $created_by AS Uint64;
-			SELECT id, created_at, updated_at, username, alias, is_admin, created_by
+			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by
 			FROM users
 			WHERE created_by = $created_by;
 		`
@@ -264,6 +266,7 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 					named.Optional("updated_at", &u.UpdatedAt),
 					named.Required("username", &u.Username),
 					named.Optional("alias", &u.Alias),
+					named.Optional("email", &u.Email),
 					named.Required("is_admin", &u.IsAdmin),
 					named.Optional("created_by", &u.CreatedBy),
 				)
@@ -349,12 +352,13 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 		DECLARE $updated_at AS Timestamp;
 		DECLARE $username AS Utf8;
 		DECLARE $alias AS Optional<Utf8>;
+		DECLARE $email AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 		DECLARE $created_by AS Optional<Uint64>;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin, created_by)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin, $created_by);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by);
 	`
 
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
@@ -365,6 +369,7 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 				table.ValueParam("$username", types.UTF8Value(user.Username)),
 				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
+				table.ValueParam("$email", types.NullableUTF8Value(user.Email)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
@@ -384,12 +389,13 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 		DECLARE $updated_at AS Optional<Timestamp>;
 		DECLARE $username AS Utf8;
 		DECLARE $alias AS Optional<Utf8>;
+		DECLARE $email AS Optional<Utf8>;
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 		DECLARE $created_by AS Optional<Uint64>;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, password_hash, is_admin, created_by)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $password_hash, $is_admin, $created_by);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by);
 	`
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
@@ -399,6 +405,7 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$updated_at", types.NullableTimestampValueFromTime(user.UpdatedAt)),
 				table.ValueParam("$username", types.UTF8Value(user.Username)),
 				table.ValueParam("$alias", types.NullableUTF8Value(user.Alias)),
+				table.ValueParam("$email", types.NullableUTF8Value(user.Email)),
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
