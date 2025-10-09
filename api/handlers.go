@@ -633,7 +633,8 @@ func (h *Handler) GenerateUploadURLHandler(c *gin.Context) {
 		return
 	}
 	userID := userIDVal.(uint64)
-
+	isAdminVal, _ := c.Get("isAdmin")
+	isAdmin := isAdminVal.(bool)
 	var req models.GenerateUploadURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
@@ -641,28 +642,38 @@ func (h *Handler) GenerateUploadURLHandler(c *gin.Context) {
 	}
 
 	// --- Authorization Check ---
-	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
-		return
-	}
-
-	uploadPath := req.Prefix
-	if !strings.HasSuffix(uploadPath, "/") {
-		uploadPath += "/"
-	}
-
-	isAllowed := false
-	for _, p := range permissions {
-		if strings.HasPrefix(uploadPath, *p.FolderPrefix) {
-			isAllowed = true
-			break
+	if isAdmin {
+		if userID != 1 { // Regular admin logic
+			adminRootFolder := fmt.Sprintf("%d/", userID)
+			if req.Prefix == "" {
+				req.Prefix = adminRootFolder
+			} else if !strings.HasPrefix(req.Prefix, adminRootFolder) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied to this path"})
+				return
+			}
 		}
-	}
-
-	if !isAllowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "access denied to this path"})
-		return
+		// Super admin (userID == 1) is allowed to proceed with any prefix.
+	} else { // Regular user logic
+		permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
+			return
+		}
+		uploadPath := req.Prefix
+		if !strings.HasSuffix(uploadPath, "/") {
+			uploadPath += "/"
+		}
+		isAllowed := false
+		for _, p := range permissions {
+			if p.FolderPrefix != nil && strings.HasPrefix(uploadPath, *p.FolderPrefix) {
+				isAllowed = true
+				break
+			}
+		}
+		if !isAllowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to this path"})
+			return
+		}
 	}
 	// --- End Authorization Check ---
 
