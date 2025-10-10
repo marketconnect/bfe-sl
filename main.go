@@ -111,6 +111,7 @@ func init() {
 				adminRoutes.GET("/storage/folders", handler.ListAllFoldersHandler)
 				adminRoutes.POST("/storage/folders", handler.CreateFolderHandler)
 				adminRoutes.POST("/storage/move", handler.MoveStorageItemsHandler)
+				adminRoutes.POST("/storage/copy", handler.CopyStorageItemsHandler)
 				adminRoutes.DELETE("/storage/items", handler.DeleteStorageItemsHandler)
 			}
 		}

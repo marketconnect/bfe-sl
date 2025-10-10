@@ -502,6 +502,137 @@ func (h *Handler) MoveStorageItemsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Items moved successfully"})
 }
 
+func (h *Handler) CopyStorageItemsHandler(c *gin.Context) {
+	var req models.MoveItemsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	// Ensure destination is a folder
+	if !strings.HasSuffix(req.Destination, "/") {
+		req.Destination += "/"
+	}
+
+	// --- Authorization Check ---
+	if adminID != 1 {
+		adminRootFolder := fmt.Sprintf("%d/", adminID)
+		if !strings.HasPrefix(req.Destination, adminRootFolder) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: destination is outside your root folder"})
+			return
+		}
+		for _, source := range req.Sources {
+			if !strings.HasPrefix(source, adminRootFolder) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only copy items from your own root folder", "item": source})
+				return
+			}
+		}
+	}
+	// --- End Authorization Check ---
+
+	objectCopies := make(map[string]string)
+
+	for _, source := range req.Sources {
+		isFolder := strings.HasSuffix(source, "/")
+		baseName := path.Base(source)
+		if isFolder {
+			baseName += "/"
+		}
+
+		// Determine non-conflicting destination name
+		finalDestPath := req.Destination + baseName
+		if isFolder {
+			exists, err := h.S3Client.PrefixExists(finalDestPath)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to check for existing folder", "details": err.Error()})
+				return
+			}
+			if exists {
+				base := strings.TrimSuffix(baseName, "/")
+				found := false
+				for i := 1; i <= 1000; i++ { // Limit to 1000 attempts
+					newName := fmt.Sprintf("%s (%d)/", base, i)
+					newPrefix := req.Destination + newName
+					exists, err := h.S3Client.PrefixExists(newPrefix)
+					if err != nil {
+						c.JSON(http.StatusBadGateway, gin.H{"error": "failed to check for existing folder", "details": err.Error()})
+						return
+					}
+					if !exists {
+						finalDestPath = newPrefix
+						found = true
+						break
+					}
+				}
+				if !found {
+					c.JSON(http.StatusConflict, gin.H{"error": "could not find a unique name for folder", "folder": baseName})
+					return
+				}
+			}
+		} else {
+			exists, err := h.S3Client.ObjectExists(finalDestPath)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to check for existing file", "details": err.Error()})
+				return
+			}
+			if exists {
+				ext := filepath.Ext(baseName)
+				base := strings.TrimSuffix(baseName, ext)
+				found := false
+				for i := 1; i <= 1000; i++ { // Limit to 1000 attempts
+					newName := fmt.Sprintf("%s (%d)%s", base, i, ext)
+					newKey := req.Destination + newName
+					exists, err := h.S3Client.ObjectExists(newKey)
+					if err != nil {
+						c.JSON(http.StatusBadGateway, gin.H{"error": "failed to check for existing file", "details": err.Error()})
+						return
+					}
+					if !exists {
+						finalDestPath = newKey
+						found = true
+						break
+					}
+				}
+				if !found {
+					c.JSON(http.StatusConflict, gin.H{"error": "could not find a unique name for file", "file": baseName})
+					return
+				}
+			}
+		}
+
+		if isFolder {
+			objects, err := h.S3Client.ListAllKeysUnderPrefix(source)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list objects in folder for copying", "folder": source, "details": err.Error()})
+				return
+			}
+			for _, objKey := range objects {
+				relativePath := strings.TrimPrefix(objKey, source)
+				destKey := finalDestPath + relativePath
+				objectCopies[objKey] = destKey
+			}
+		} else { // is a file
+			objectCopies[source] = finalDestPath
+		}
+	}
+
+	for source, dest := range objectCopies {
+		if err := h.S3Client.CopyObject(source, dest); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to copy object", "source": source, "destination": dest, "details": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Items copied successfully"})
+}
+
 func (h *Handler) ListUsersHandler(c *gin.Context) {
 	adminIDVal, exists := c.Get("userID")
 	if !exists {

@@ -15,63 +15,7 @@ servers:
 tags:
   - name: Authentication
     description: User login and token generation
-  - n      CreateFolderRequest:
-        type: o      DeleteItemsRequest:
-        type: object
-        properties:
-          keys:
-            type: array
-            items:
-              type: string
-            description: A list of file paths to delete.
-            example: ["123/documents/report.docx", "123/archive.zip"]
-          folders:
-            type: array
-            items:
-              type: string
-            description: A list of folder prefixes to delete recursively.
-            example: ["123/old_images/", "456/temp/"]
-
-      MoveItemsRequest:
-        type: object
-        required: [sources, destination]
-        properties:
-          sources:
-            type: array
-            items:
-              type: string
-            description: A list of source file keys or folder prefixes to move. Folders must end with a '/'.
-            example: ["123/documents/report.docx", "123/old_images/"]
-          destination:
-            type: string
-            description: The destination folder prefix. Must end with a '/'.
-            example: "123/new_location/"
-
-      GenerateUploadURLRequest:uired: [folderPath]
-        properties:
-          folderPath:
-            type: string
-            description: The full path for the new folder, ending with a '/'.
-            example: "123/new_folder/"
-
-      DeleteItemsRequest:
-        type: object
-        required: [keys, folders]
-        properties:
-          keys:
-            type: array
-            description: A list of file paths to delete
-            items:
-              type: string
-            example: ["123/documents/report.docx", "123/archive.zip"]
-          folders:
-            type: array
-            description: A list of folder paths to delete (recursive)
-            items:
-              type: string
-            example: ["123/old_images/", "456/temp/"]
-
-      GenerateUploadURLRequest:Management
+  - name: File Management
     description: Operations for authenticated users to manage files and folders
   - name: Admin - User Management
     description: Admin-only endpoints for creating and managing users
@@ -543,6 +487,46 @@ paths:
           '500':
             $ref: '#/components/responses/InternalServerError'
 
+    /admin/storage/copy:
+      post:
+        tags:
+          - Admin - Storage Management
+        summary: Copy files and folders
+        description: |-
+          Copies specified files and/or folders to a new destination.
+          - **Super Admin:** Can copy any item to any path.
+          - **Admin:** Can only copy items within their own root directory.
+          - If a name conflict occurs at the destination, the copied item will be renamed (e.g., `file.txt` becomes `file (1).txt`).
+        security:
+          - BearerAuth: []
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveItemsRequest'
+        responses:
+          '200':
+            description: Items copied successfully.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/SuccessMessage'
+          '400':
+            $ref: '#/components/responses/BadRequest'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '409':
+            description: A name conflict occurred that could not be resolved automatically.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/ErrorResponse'
+          '500':
+            $ref: '#/components/responses/InternalServerError'
+
     /admin/storage/items:
       delete:
         tags:
@@ -588,32 +572,32 @@ components:
           type: string
           description: Unique identifier for the user
           example: "15958461734691702294"
-          createdAt:
-            type: string
-            format: date-time
-          updatedAt:
-            type: string
-            format: date-time
-          username:
-            type: string
-          alias:
-            type: string
-            nullable: true
-          email:
-            type: string
-            format: email
-            nullable: true
-          isAdmin:
-            type: boolean
-          permissions:
-            type: array
-            items:
-              $ref: '#/components/schemas/UserPermission'
-          createdBy:
-            type: string
-            description: The ID of the admin who created this user.
-            nullable: true
-            example: "1"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        username:
+          type: string
+        alias:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        isAdmin:
+          type: boolean
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserPermission'
+        createdBy:
+          type: string
+          description: The ID of the admin who created this user.
+          nullable: true
+          example: "1"
 
       UserPermission:
         type: object
@@ -698,6 +682,21 @@ components:
             type: string
             description: The full path for the new folder, ending with a '/'.
             example: "123/new_folder/"
+
+      MoveItemsRequest:
+        type: object
+        required: [sources, destination]
+        properties:
+          sources:
+            type: array
+            items:
+              type: string
+            description: A list of source file keys or folder prefixes to move. Folders must end with a '/'.
+            example: ["123/documents/report.docx", "123/old_images/"]
+          destination:
+            type: string
+            description: The destination folder prefix. Must end with a '/'.
+            example: "123/new_location/"
 
       DeleteItemsRequest:
         type: object
@@ -866,3 +865,4 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/SuccessMessage'
+            
