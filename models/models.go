@@ -109,3 +109,8 @@ type DeleteItemsRequest struct {
 	Keys    []string `json:"keys"`
 	Folders []string `json:"folders"`
 }
+
+type MoveItemsRequest struct {
+	Sources     []string `json:"sources" binding:"required"`
+	Destination string   `json:"destination" binding:"required"`
+}

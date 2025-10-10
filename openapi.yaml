@@ -16,8 +16,38 @@ tags:
   - name: Authentication
     description: User login and token generation
   - n      CreateFolderRequest:
+        type: o      DeleteItemsRequest:
         type: object
-        required: [folderPath]
+        properties:
+          keys:
+            type: array
+            items:
+              type: string
+            description: A list of file paths to delete.
+            example: ["123/documents/report.docx", "123/archive.zip"]
+          folders:
+            type: array
+            items:
+              type: string
+            description: A list of folder prefixes to delete recursively.
+            example: ["123/old_images/", "456/temp/"]
+
+      MoveItemsRequest:
+        type: object
+        required: [sources, destination]
+        properties:
+          sources:
+            type: array
+            items:
+              type: string
+            description: A list of source file keys or folder prefixes to move. Folders must end with a '/'.
+            example: ["123/documents/report.docx", "123/old_images/"]
+          destination:
+            type: string
+            description: The destination folder prefix. Must end with a '/'.
+            example: "123/new_location/"
+
+      GenerateUploadURLRequest:uired: [folderPath]
         properties:
           folderPath:
             type: string
@@ -476,16 +506,17 @@ paths:
           '500':
             $ref: '#/components/responses/InternalServerError'
 
-    /admin/storage/items:
-      delete:
+    /admin/storage/move:
+      post:
         tags:
           - Admin - Storage Management
-        summary: Delete files and folders
+        summary: Move files and folders
         description: |-
-          Deletes specified files and/or folders. Folder deletion is recursive.
-          - **Super Admin:** Can delete any item at any path.
-          - **Admin:** Can only delete items within their own root directory.
-          The operation is atomic; if any single item fails to delete, the process stops and an error is returned.
+          Moves specified files and/or folders to a new destination.
+          - **Super Admin:** Can move any item to any path.
+          - **Admin:** Can only move items within their own root directory.
+          - If a name conflict occurs at the destination, the moved item will be renamed (e.g., `file.txt` becomes `file (1).txt`).
+          - The operation is not atomic. If an error occurs during the copy phase, the operation stops, and some files may have been copied while others have not.
         security:
           - BearerAuth: []
         requestBody:
@@ -493,7 +524,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DeleteItemsRequest'
+                $ref: '#/components/schemas/MoveItemsRequest'
         responses:
           '200':
             $ref: '#/components/responses/SuccessMessage'
@@ -503,6 +534,12 @@ paths:
             $ref: '#/components/responses/Unauthorized'
           '403':
             $ref: '#/components/responses/Forbidden'
+          '409':
+            description: A name conflict occurred that could not be resolved automatically.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/ErrorResponse'
           '500':
             $ref: '#/components/responses/InternalServerError'
 
@@ -807,6 +844,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
       description: Forbidden - The authenticated user does not have permission to perform this action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflict - The resource already exists or the request conflicts with the current state of the resource
       content:
         application/json:
           schema:

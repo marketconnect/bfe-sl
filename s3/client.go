@@ -3,9 +3,11 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -250,4 +252,70 @@ func (c *Client) DeleteObjects(keys []string) error {
 	}
 
 	return nil
+}
+
+func (c *Client) CopyObject(sourceKey, destinationKey string) error {
+	copySource := url.PathEscape(c.BucketName + "/" + sourceKey)
+	_, err := c.S3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
+		Bucket:     &c.BucketName,
+		CopySource: &copySource,
+		Key:        &destinationKey,
+	})
+	return err
+}
+
+func (c *Client) ObjectExists(key string) (bool, error) {
+	_, err := c.S3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: &c.BucketName,
+		Key:    &key,
+	})
+	if err != nil {
+		var nfe *types.NotFound
+		if errors.As(err, &nfe) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *Client) PrefixExists(prefix string) (bool, error) {
+	result, err := c.S3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		Bucket:  &c.BucketName,
+		Prefix:  &prefix,
+		MaxKeys: aws.Int32(1),
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(result.Contents) > 0, nil
+}
+
+func (c *Client) ListAllKeysUnderPrefix(prefix string) ([]string, error) {
+	var keys []string
+	var token *string
+
+	for {
+		input := &s3.ListObjectsV2Input{
+			Bucket:            &c.BucketName,
+			Prefix:            &prefix,
+			ContinuationToken: token,
+		}
+
+		result, err := c.S3Client.ListObjectsV2(context.TODO(), input)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, item := range result.Contents {
+			keys = append(keys, *item.Key)
+		}
+
+		if result.IsTruncated == nil || !*result.IsTruncated {
+			break
+		}
+		token = result.NextContinuationToken
+	}
+
+	return keys, nil
 }
