@@ -88,3 +88,12 @@ echo "Hello, Yandex Cloud!" > example.txt
 
 curl -X PUT   -H "Content-Type: text/plain"   --data-binary "@example.txt"   "$UPLOAD_URL"
 ```
+
+git fetch origin
+git switch -c feature-login origin/master
+git add -A
+git commit -m "Добавляет форму логина"
+git switch master
+git pull origin master
+git merge --no-ff feature-login
+git push origin master

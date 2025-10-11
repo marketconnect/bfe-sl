@@ -46,6 +46,7 @@ type CreateUserRequest struct {
 	Alias    string `json:"alias"`
 	Email    string `json:"email"`
 	IsAdmin  bool   `json:"is_admin"`
+	SendAuthByEmail bool   `json:"sendAuthByEmail"`
 }
 
 type AssignPermissionRequest struct {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/marketconnect/bfe-sl/auth"
 	"github.com/marketconnect/bfe-sl/db"
+	"github.com/marketconnect/bfe-sl/email"
 	"github.com/marketconnect/bfe-sl/models"
 	"github.com/marketconnect/bfe-sl/s3"
 
@@ -26,6 +27,7 @@ import (
 type Handler struct {
 	Store      db.Store
 	S3Client   *s3.Client
+	EmailClient *email.Client
 	JwtSecret  string
 	PreSignTTL time.Duration
 }
@@ -142,6 +144,13 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 			log.Printf("CRITICAL: User %d and folder '%s' created, but failed to assign permission: %v. Manual intervention required.", user.ID, folderPath, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "user and folder created, but failed to assign permission", "details": err.Error()})
 			return
+		}
+	}
+
+	if req.SendAuthByEmail && req.Email != "" {
+		err := h.EmailClient.SendAuthDetails(c.Request.Context(), req.Email, req.Username, req.Password)
+		if err != nil {
+			log.Printf("WARN: User %d created successfully, but failed to send auth email to %s: %v", user.ID, req.Email, err)
 		}
 	}
 

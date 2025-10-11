@@ -13,6 +13,7 @@ import (
 	"github.com/marketconnect/bfe-sl/api"
 	"github.com/marketconnect/bfe-sl/config"
 	"github.com/marketconnect/bfe-sl/db"
+	"github.com/marketconnect/bfe-sl/email"
 	"github.com/marketconnect/bfe-sl/models"
 	"github.com/marketconnect/bfe-sl/s3"
 	"golang.org/x/crypto/bcrypt"
@@ -36,12 +37,14 @@ func init() {
 	store := &db.YdbStore{Driver: ydbDriver}
 
 	s3Client := s3.NewClient(cfg)
+	emailClient := email.NewClient(cfg)
 
 	seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
 		Store:      store,
 		S3Client:   s3Client,
+		EmailClient: emailClient,
 		JwtSecret:  cfg.JWTSecretKey,
 		PreSignTTL: time.Duration(cfg.PresignTTLSeconds) * time.Second,
 	}
