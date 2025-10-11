@@ -114,12 +114,13 @@ func (h *Handler) CreateUserHandler(c *gin.Context) {
 	}
 
 	user := &models.User{
-		Username:     req.Username,
-		Alias:        aliasPtr,
-		Email:        emailPtr,
-		PasswordHash: string(hashedPassword),
-		IsAdmin:      req.IsAdmin,
-		CreatedBy:    &adminID,
+		Username:      req.Username,
+		Alias:         aliasPtr,
+		Email:         emailPtr,
+		PasswordHash:  string(hashedPassword),
+		IsAdmin:       req.IsAdmin,
+		NotifyByEmail: req.NotifyByEmail,
+		CreatedBy:     &adminID,
 	}
 
 	if err := h.Store.CreateUser(c.Request.Context(), user); err != nil {
@@ -718,6 +719,49 @@ func (h *Handler) DeleteUserHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted successfully"})
+}
+
+func (h *Handler) UpdateUserNotifyHandler(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := strconv.ParseUint(userIDStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	var req models.UpdateUserNotifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+
+	if userID == adminID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you cannot change your own notification settings"})
+		return
+	}
+
+	userToUpdate, err := h.Store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve user", "details": err.Error()})
+		return
+	}
+	if userToUpdate.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "you cannot change notification settings for another admin"})
+		return
+	}
+
+	if err := h.Store.UpdateUserNotifyByEmail(c.Request.Context(), userID, req.NotifyByEmail); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user notification setting", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "user notification setting updated successfully"})
 }
 
 func (h *Handler) AssignPermissionHandler(c *gin.Context) {
