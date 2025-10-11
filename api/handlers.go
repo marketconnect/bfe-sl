@@ -667,17 +667,39 @@ func (h *Handler) DeleteUserHandler(c *gin.Context) {
 	}
 	adminID := adminIDVal.(uint64)
 
+	userToDelete, err := h.Store.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		if err == db.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve user to delete", "details": err.Error()})
+		return
+	}
+
 	// Super admin can delete anyone.
 	// Regular admins can only delete users they created.
 	if adminID != 1 {
-		userToDelete, err := h.Store.GetUserByID(c.Request.Context(), userID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve user to delete", "details": err.Error()})
-			return
-		}
 		if userToDelete.CreatedBy == nil || *userToDelete.CreatedBy != adminID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only delete users you created"})
 			return
+		}
+	}
+
+	// If the user is an admin, attempt to delete their S3 folder first.
+	if userToDelete.IsAdmin {
+		adminRootFolder := fmt.Sprintf("%d/", userToDelete.ID)
+		keysToDelete, err := h.S3Client.ListAllKeysUnderPrefix(adminRootFolder)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list objects in admin's folder for deletion", "folder": adminRootFolder, "details": err.Error()})
+			return
+		}
+
+		if len(keysToDelete) > 0 {
+			if err := h.S3Client.DeleteObjects(keysToDelete); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete admin's folder from storage", "details": err.Error()})
+				return
+			}
 		}
 	}
 
