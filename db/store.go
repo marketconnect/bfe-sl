@@ -27,6 +27,7 @@ type Store interface {
 	GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error)
 	AssignPermission(ctx context.Context, permission *models.UserPermission) error
 	UpdateUserPassword(ctx context.Context, userID uint64, passwordHash string) error
+	UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error
 	RevokePermission(ctx context.Context, permissionID uint64) error
 	GetUserPermissions(ctx context.Context, userID uint64) ([]models.UserPermission, error)
 	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
@@ -55,7 +56,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 
 	query := `
 		DECLARE $username AS Utf8;
-		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by
+		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by, notify_by_email
 		FROM users
 		WHERE username = $username;
 	`
@@ -85,6 +86,7 @@ func (s *YdbStore) GetUserByUsername(ctx context.Context, username string) (*mod
 				&user.PasswordHash,
 				&user.IsAdmin,
 				&user.CreatedBy,
+				&user.NotifyByEmail,
 			)
 			if err != nil {
 				log.Printf("DEBUG: res.Scan FAILED with error: %v", err)
@@ -120,7 +122,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 
 	query := `
 		DECLARE $id AS Uint64;
-		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by
+		SELECT id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by, notify_by_email
 		FROM users
 		WHERE id = $id;
 	`
@@ -147,6 +149,7 @@ func (s *YdbStore) GetUserByID(ctx context.Context, userID uint64) (*models.User
 				named.Required("password_hash", &user.PasswordHash),
 				named.Required("is_admin", &user.IsAdmin),
 				named.Optional("created_by", &user.CreatedBy),
+				named.Required("notify_by_email", &user.NotifyByEmail),
 			)
 			if err != nil {
 				return fmt.Errorf("scan failed: %w", err)
@@ -234,14 +237,14 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 
 	if adminID == 1 { // Super admin
 		query = `
-			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by
+			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by, notify_by_email
 			FROM users;
 		`
 		params = table.NewQueryParameters()
 	} else { // Regular admin
 		query = `
 			DECLARE $created_by AS Uint64;
-			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by
+			SELECT id, created_at, updated_at, username, alias, email, is_admin, created_by, notify_by_email
 			FROM users
 			WHERE created_by = $created_by;
 		`
@@ -269,6 +272,7 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 					named.Optional("email", &u.Email),
 					named.Required("is_admin", &u.IsAdmin),
 					named.Optional("created_by", &u.CreatedBy),
+					named.Required("notify_by_email", &u.NotifyByEmail),
 				)
 				if err != nil {
 					return err
@@ -356,9 +360,10 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 		DECLARE $created_by AS Optional<Uint64>;
+		DECLARE $notify_by_email AS Bool;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by, notify_by_email)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by, $notify_by_email);
 	`
 
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
@@ -373,6 +378,7 @@ func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
+				table.ValueParam("$notify_by_email", types.BoolValue(user.NotifyByEmail)),
 			),
 		)
 		return err
@@ -393,9 +399,10 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 		DECLARE $password_hash AS Utf8;
 		DECLARE $is_admin AS Bool;
 		DECLARE $created_by AS Optional<Uint64>;
+		DECLARE $notify_by_email AS Bool;
 
-		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by)
-		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by);
+		UPSERT INTO users (id, created_at, updated_at, username, alias, email, password_hash, is_admin, created_by, notify_by_email)
+		VALUES ($id, $created_at, $updated_at, $username, $alias, $email, $password_hash, $is_admin, $created_by, $notify_by_email);
 	`
 	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
@@ -409,6 +416,7 @@ func (s *YdbStore) UpdateUser(ctx context.Context, user *models.User) error {
 				table.ValueParam("$password_hash", types.UTF8Value(user.PasswordHash)),
 				table.ValueParam("$is_admin", types.BoolValue(user.IsAdmin)),
 				table.ValueParam("$created_by", types.NullableUint64Value(user.CreatedBy)),
+				table.ValueParam("$notify_by_email", types.BoolValue(user.NotifyByEmail)),
 			),
 		)
 		return err
@@ -431,6 +439,29 @@ func (s *YdbStore) UpdateUserPassword(ctx context.Context, userID uint64, passwo
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(userID)),
 				table.ValueParam("$password_hash", types.UTF8Value(passwordHash)),
+				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
+			),
+		)
+		return err
+	})
+}
+
+func (s *YdbStore) UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error {
+	query := `
+		DECLARE $id AS Uint64;
+		DECLARE $notify_by_email AS Bool;
+		DECLARE $updated_at AS Timestamp;
+
+		UPDATE users
+		SET notify_by_email = $notify_by_email, updated_at = $updated_at
+		WHERE id = $id;
+	`
+	ts := time.Now()
+	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$id", types.Uint64Value(userID)),
+				table.ValueParam("$notify_by_email", types.BoolValue(notify)),
 				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)

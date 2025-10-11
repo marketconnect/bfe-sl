@@ -7,6 +7,7 @@ CREATE TABLE users (
     email Utf8,
     password_hash Utf8 NOT NULL,
     is_admin Bool NOT NULL,
+    notify_by_email Bool NOT NULL DEFAULT false,
     created_by Uint64,
     PRIMARY KEY (id),
     INDEX username_index GLOBAL ON (username)

@@ -12,6 +12,7 @@ type User struct {
 	VersionCheck string           `json:"-"`
 	PasswordHash string           `json:"-"`
 	IsAdmin      bool             `json:"isAdmin"`
+	NotifyByEmail bool            `json:"notifyByEmail"`
 	Permissions  []UserPermission `json:"permissions"`
 	CreatedBy    *uint64          `json:"createdBy,string,omitempty"`
 }
@@ -46,6 +47,8 @@ type CreateUserRequest struct {
 	Alias    string `json:"alias"`
 	Email    string `json:"email"`
 	IsAdmin  bool   `json:"is_admin"`
+	NotifyByEmail   bool   `json:"notifyByEmail"`
+	SendAuthByEmail bool   `json:"sendAuthByEmail"`
 }
 
 type AssignPermissionRequest struct {
@@ -61,6 +64,10 @@ type UpdateAdminRequest struct {
 	Username string  `json:"username"`
 	Password string  `json:"password"`
 	Email    *string `json:"email"`
+}
+
+type UpdateUserNotifyRequest struct {
+	NotifyByEmail bool `json:"notifyByEmail"`
 }
 
 type ArchiveRequest struct {
