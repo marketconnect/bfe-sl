@@ -26,9 +26,14 @@ type Client struct {
 	BucketName    string
 }
 
+type S3File struct {
+	Key          string
+	LastModified time.Time
+}
+
 type ListObjectsOutput struct {
 	Folders []string
-	Files   []string
+	Files   []S3File
 }
 
 func NewClient(appCfg *appconfig.Config) *Client {
@@ -73,10 +78,10 @@ func (c *Client) ListObjects(prefix string, delimiter string) (*ListObjectsOutpu
 		return nil, err
 	}
 
-	var files []string
+	var files []S3File
 	for _, item := range result.Contents {
-		if *item.Key != prefix {
-			files = append(files, *item.Key)
+		if *item.Key != prefix && item.LastModified != nil && item.Size != nil && *item.Size > 0 {
+			files = append(files, S3File{Key: *item.Key, LastModified: *item.LastModified})
 		}
 	}
 

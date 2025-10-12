@@ -33,3 +33,16 @@ CREATE TABLE archive_jobs (
     updated_at Timestamp NOT NULL,
     PRIMARY KEY (id)
 );
+
+CREATE TABLE file_permissions (
+    path Utf8,
+    access_type Utf8,
+    PRIMARY KEY (path)
+);
+
+CREATE TABLE file_view_logs (
+    user_id Uint64,
+    file_key Utf8,
+    last_viewed_at Timestamp,
+    PRIMARY KEY (user_id, file_key)
+);

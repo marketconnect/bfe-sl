@@ -30,6 +30,9 @@ type Store interface {
 	UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error
 	RevokePermission(ctx context.Context, permissionID uint64) error
 	GetUserPermissions(ctx context.Context, userID uint64) ([]models.UserPermission, error)
+	GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error)
+	LogFileView(ctx context.Context, userID uint64, fileKey string) error
+	GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error)
 	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
 	GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error)
 	UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error
@@ -227,6 +230,135 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 	}
 
 	return permissions, nil
+}
+
+func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error) {
+	if len(paths) == 0 {
+		return make(map[string]string), nil
+	}
+
+	permissions := make(map[string]string)
+
+	pathList := make([]types.Value, len(paths))
+	for i, p := range paths {
+		pathList[i] = types.UTF8Value(p)
+	}
+
+	query := `
+		DECLARE $paths AS List<Utf8>;
+
+		SELECT path, access_type
+		FROM file_permissions
+		WHERE path IN $paths;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$paths", types.ListValue(pathList...)),
+			),
+		)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for res.NextResultSet(ctx) {
+			for res.NextRow() {
+				var path, accessType string
+				err = res.ScanNamed(
+					named.Required("path", &path),
+					named.Required("access_type", &accessType),
+				)
+				if err != nil {
+					return err
+				}
+				permissions[path] = accessType
+			}
+		}
+		return res.Err()
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return permissions, nil
+}
+
+func (s *YdbStore) LogFileView(ctx context.Context, userID uint64, fileKey string) error {
+	query := `
+		DECLARE $user_id AS Uint64;
+		DECLARE $file_key AS Utf8;
+		DECLARE $last_viewed_at AS Timestamp;
+
+		UPSERT INTO file_view_logs (user_id, file_key, last_viewed_at)
+		VALUES ($user_id, $file_key, $last_viewed_at);
+	`
+	ts := time.Now()
+	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$user_id", types.Uint64Value(userID)),
+				table.ValueParam("$file_key", types.UTF8Value(fileKey)),
+				table.ValueParam("$last_viewed_at", types.TimestampValueFromTime(ts)),
+			),
+		)
+		return err
+	})
+}
+
+func (s *YdbStore) GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error) {
+	if len(fileKeys) == 0 {
+		return make(map[string]time.Time), nil
+	}
+
+	viewTimes := make(map[string]time.Time)
+
+	keyList := make([]types.Value, len(fileKeys))
+	for i, key := range fileKeys {
+		keyList[i] = types.UTF8Value(key)
+	}
+
+	query := `
+		DECLARE $user_id AS Uint64;
+		DECLARE $file_keys AS List<Utf8>;
+
+		SELECT file_key, last_viewed_at
+		FROM file_view_logs
+		WHERE user_id = $user_id AND file_key IN $file_keys;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$user_id", types.Uint64Value(userID)),
+				table.ValueParam("$file_keys", types.ListValue(keyList...)),
+			),
+		)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for res.NextResultSet(ctx) {
+			for res.NextRow() {
+				var fileKey string
+				var lastViewedAt time.Time
+				err = res.Scan(
+					&fileKey,
+					&lastViewedAt,
+				)
+				if err != nil {
+					return err
+				}
+				viewTimes[fileKey] = lastViewedAt
+			}
+		}
+		return res.Err()
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return viewTimes, nil
 }
 
 func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error) {

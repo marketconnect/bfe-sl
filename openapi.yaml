@@ -224,7 +224,7 @@ paths:
         tags:
           - File Management
         summary: Get a presigned URL for file download
-        description: Creates a temporary, secure URL to download a specific file. The user must have permission to access the file's path.
+        description: Creates a temporary, secure URL to download a specific file. The user must have permission to access the file's path. For read-only access, returns a convertedPath instead of direct URL.
         security:
           - BearerAuth: []
         parameters:
@@ -236,11 +236,13 @@ paths:
               type: string
         responses:
           '200':
-            description: Presigned URL generated successfully.
+            description: Presigned URL or converted path returned successfully.
             content:
               application/json:
                 schema:
-                  $ref: '#/components/schemas/PresignResponse'
+                  oneOf:
+                    - $ref: '#/components/schemas/PresignResponse'
+                    - $ref: '#/components/schemas/ConvertedPathResponse'
           '400':
             $ref: '#/components/responses/BadRequest'
           '401':
@@ -1082,6 +1084,37 @@ components:
           nullable: true
           example: "1"
 
+      FileInfo:
+        type: object
+        properties:
+          key:
+            type: string
+            description: The file key/path in storage
+            example: "123/documents/report.pdf"
+          url:
+            type: string
+            description: Optional URL for the file; typically empty, use /files/presign to get a download URL
+            nullable: true
+            example: null
+          createdAt:
+            type: string
+            format: date-time
+            description: When the file was created/first uploaded
+            nullable: true
+            example: "2023-05-15T10:30:00Z"
+          accessType:
+            type: string
+            description: The access level for the file; either 'read_only' or 'read_and_download'
+            enum: ['read_only', 'read_and_download']
+            nullable: true
+            example: "read_and_download"
+          lastViewedAt:
+            type: string
+            format: date-time
+            description: When the file was last accessed by this user
+            nullable: true
+            example: "2023-05-16T14:22:45Z"
+
       UserPermission:
         type: object
         properties:
@@ -1304,13 +1337,7 @@ components:
           files:
             type: array
             items:
-              type: object
-              properties:
-                key:
-                  type: string
-                url:
-                  type: string
-                  description: This is typically empty; use /files/presign to get a download URL.
+              $ref: '#/components/schemas/FileInfo'
 
       GenerateUploadURLResponse:
         type: object
@@ -1327,6 +1354,14 @@ components:
           url:
             type: string
             format: uri
+
+      ConvertedPathResponse:
+        type: object
+        properties:
+          convertedPath:
+            type: string
+            description: Path for converted/read-only version of the file
+            example: "converted/123/documents/report.pdf"
 
       CreateUserResponse:
         type: object

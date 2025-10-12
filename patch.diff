@@ -1,0 +1,526 @@
+diff --git a/api/handlers.go b/api/handlers.go
+index 893c52a..410051d 100644
+--- a/api/handlers.go
++++ b/api/handlers.go
+@@ -2,12 +2,14 @@
+ 
+ import (
+ 	"archive/zip"
+ 	"bytes"
+ 	"context"
+ 	"fmt"
+ 	"io"
+ 	"log"
+ 	"net/http"
+ 	"path"
+ 	"path/filepath"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/marketconnect/bfe-sl/auth"
+@@ -1025,8 +1027,8 @@
+ 	if len(permissions) == 0 {
+ 		c.JSON(http.StatusOK, models.ListFilesResponse{
+ 			Path:    "/",
+ 			Folders: []string{},
+-			Files:   []models.FileWithURL{},
++			Files:   []models.FileInfo{},
+ 		})
+ 		return
+ 	}
+@@ -1044,14 +1046,78 @@
+ 				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
+ 				return
+ 			}
+-			files := make([]models.FileWithURL, 0, len(listOutput.Files))
+-			for _, key := range listOutput.Files {
+-				files = append(files, models.FileWithURL{Key: key})
+-			}
++
++			// --- Enrich files with metadata ---
++			fileKeys := make([]string, 0, len(listOutput.Files))
++			pathsToCheckSet := make(map[string]struct{})
++			for _, file := range listOutput.Files {
++				fileKeys = append(fileKeys, file.Key)
++				pathsToCheckSet[file.Key] = struct{}{}
++				currentPath := file.Key
++				for {
++					currentPath = path.Dir(currentPath)
++					if currentPath == "." || currentPath == "/" {
++						break
++					}
++					folderPath := currentPath + "/"
++					if _, exists := pathsToCheckSet[folderPath]; !exists {
++						pathsToCheckSet[folderPath] = struct{}{}
++					}
++				}
++			}
++			pathsToCheck := make([]string, 0, len(pathsToCheckSet))
++			for p := range pathsToCheckSet {
++				pathsToCheck = append(pathsToCheck, p)
++			}
++
++			filePerms, err := h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
++			if err != nil {
++				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
++				return
++			}
++			viewTimes, err := h.Store.GetLastViewTimes(c.Request.Context(), userID, fileKeys)
++			if err != nil {
++				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve view logs", "details": err.Error()})
++				return
++			}
++
++			files := make([]models.FileInfo, 0, len(listOutput.Files))
++			for _, file := range listOutput.Files {
++				accessType := "read_and_download" // Default
++				if val, ok := filePerms[file.Key]; ok {
++					accessType = val
++				} else {
++					currentPath := file.Key
++					for {
++						currentPath = path.Dir(currentPath)
++						if currentPath == "." || currentPath == "/" {
++							break
++						}
++						folderPath := currentPath + "/"
++						if val, ok := filePerms[folderPath]; ok {
++							accessType = val
++							break
++						}
++					}
++				}
++
++				var lastViewedAt *time.Time
++				if vt, ok := viewTimes[file.Key]; ok {
++					lastViewedAt = &vt
++				}
++				createdAt := file.LastModified
++
++				files = append(files, models.FileInfo{
++					Key:          file.Key,
++					CreatedAt:    &createdAt,
++					AccessType:   accessType,
++					LastViewedAt: lastViewedAt,
++				})
++			}
++
+ 			c.JSON(http.StatusOK, models.ListFilesResponse{
+ 				Path:    "/", // Path is still root
+ 				Folders: listOutput.Folders,
+ 				Files:   files,
+ 			})
+ 			return
+ 		}
+@@ -1066,7 +1132,7 @@
+ 		c.JSON(http.StatusOK, models.ListFilesResponse{
+ 			Path:    "/",
+ 			Folders: rootFolders,
+-			Files:   []models.FileWithURL{},
++			Files:   []models.FileInfo{},
+ 		})
+ 		return
+ 	}
+@@ -1093,11 +1159,82 @@
+ 		return
+ 	}
+ 
+-	// Возвращаем только ключи; url оставляем пустым — фронт получит свежий через /files/presign
+-	files := make([]models.FileWithURL, 0, len(listOutput.Files))
+-	for _, key := range listOutput.Files {
+-		files = append(files, models.FileWithURL{Key: key})
+-	}
++	// --- Enrich files with metadata ---
++
++	// 1. Collect all paths for which we need metadata
++	fileKeys := make([]string, 0, len(listOutput.Files))
++	pathsToCheckSet := make(map[string]struct{})
++	for _, file := range listOutput.Files {
++		fileKeys = append(fileKeys, file.Key)
++		pathsToCheckSet[file.Key] = struct{}{}
++		currentPath := file.Key
++		for {
++			currentPath = path.Dir(currentPath)
++			if currentPath == "." || currentPath == "/" {
++				break
++			}
++			folderPath := currentPath + "/"
++			if _, exists := pathsToCheckSet[folderPath]; !exists {
++				pathsToCheckSet[folderPath] = struct{}{}
++			}
++		}
++	}
++	pathsToCheck := make([]string, 0, len(pathsToCheckSet))
++	for p := range pathsToCheckSet {
++		pathsToCheck = append(pathsToCheck, p)
++	}
++
++	// 2. Fetch metadata from DB in parallel
++	var filePerms map[string]string
++	var viewTimes map[string]time.Time
++	var permsErr, viewsErr error
++
++	wg := sync.WaitGroup{}
++	if len(pathsToCheck) > 0 {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			filePerms, permsErr = h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
++		}()
++	}
++	if len(fileKeys) > 0 {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			viewTimes, viewsErr = h.Store.GetLastViewTimes(c.Request.Context(), userID, fileKeys)
++		}()
++	}
++	wg.Wait()
++
++	if permsErr != nil {
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": permsErr.Error()})
++		return
++	}
++	if viewsErr != nil {
++		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve view logs", "details": viewsErr.Error()})
++		return
++	}
++
++	// 3. Construct response
++	files := make([]models.FileInfo, 0, len(listOutput.Files))
++	for _, file := range listOutput.Files {
++		accessType := "read_and_download" // Default
++		if val, ok := filePerms[file.Key]; ok {
++			accessType = val
++		} else {
++			currentPath := file.Key
++			for {
++				currentPath = path.Dir(currentPath)
++				if currentPath == "." || currentPath == "/" {
++					break
++				}
++				folderPath := currentPath + "/"
++				if val, ok := filePerms[folderPath]; ok {
++					accessType = val
++					break
++				}
++			}
++		}
++
++		var lastViewedAt *time.Time
++		if vt, ok := viewTimes[file.Key]; ok {
++			lastViewedAt = &vt
++		}
++		createdAt := file.LastModified
++
++		files = append(files, models.FileInfo{
++			Key:          file.Key,
++			CreatedAt:    &createdAt,
++			AccessType:   accessType,
++			LastViewedAt: lastViewedAt,
++		})
++	}
++	// --- End of metadata enrichment ---
+ 
+ 	c.JSON(http.StatusOK, models.ListFilesResponse{
+ 		Path:    requestedPath,
+@@ -1314,6 +1441,11 @@
+ 	}
+ 
+ 	for key := range allKeys {
++		// Log the view for each file included in the archive
++		if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
++			log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
++			// Do not fail the download, just log the error
++		}
+ 		obj, err := h.S3Client.GetObject(key)
+ 		if err != nil {
+ 			log.Printf("Error getting object %s: %v", key, err)
+@@ -1400,6 +1532,9 @@
+ 		return
+ 	}
+ 	userID := userIDVal.(uint64)
++	isAdminVal, _ := c.Get("isAdmin")
++	isAdmin := isAdminVal.(bool)
+ 
+ 	key := c.Query("key")
+ 	if key == "" {
+@@ -1424,6 +1559,47 @@
+ 		return
+ 	}
+ 
++	// Log the view action
++	if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
++		log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
++		// Do not fail the request, just log the error
++	}
++
++	// Check for read-only access for non-admins
++	if !isAdmin {
++		// Hierarchically check permissions
++		pathsToCheck := []string{key}
++		currentPath := key
++		for {
++			currentPath = path.Dir(currentPath)
++			if currentPath == "." || currentPath == "/" {
++				break
++			}
++			pathsToCheck = append(pathsToCheck, currentPath+"/")
++		}
++
++		perms, err := h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
++		if err != nil {
++			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
++			return
++		}
++
++		accessType := "read_and_download" // Default
++		for _, p := range pathsToCheck {
++			if val, ok := perms[p]; ok {
++				accessType = val
++				break // Most specific permission found
++			}
++		}
++
++		if accessType == "read_only" {
++			convertedPath := path.Join("converted", key)
++			c.JSON(http.StatusOK, gin.H{"convertedPath": convertedPath})
++			return
++		}
++	}
++
+ 	u, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTL)
+ 	if err != nil {
+ 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to presign url", "details": err.Error()})
+diff --git a/db/store.go b/db/store.go
+index 235313d..307077f 100644
+--- a/db/store.go
++++ b/db/store.go
+@@ -27,6 +27,9 @@
+ 	UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error
+ 	RevokePermission(ctx context.Context, permissionID uint64) error
+ 	GetUserPermissions(ctx context.Context, userID uint64) ([]models.UserPermission, error)
++	GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error)
++	LogFileView(ctx context.Context, userID uint64, fileKey string) error
++	GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error)
+ 	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
+ 	GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error)
+ 	UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error
+@@ -250,6 +253,122 @@
+ 	return permissions, nil
+ }
+ 
++func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error) {
++	if len(paths) == 0 {
++		return make(map[string]string), nil
++	}
++
++	permissions := make(map[string]string)
++
++	pathList := make([]types.Value, len(paths))
++	for i, p := range paths {
++		pathList[i] = types.UTF8Value(p)
++	}
++
++	query := `
++		DECLARE $paths AS List<Utf8>;
++
++		SELECT path, access_type
++		FROM file_permissions
++		WHERE path IN $paths;
++	`
++	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
++		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
++			table.NewQueryParameters(
++				table.ValueParam("$paths", types.ListValue(pathList...)),
++			),
++		)
++		if err != nil {
++			return err
++		}
++		defer res.Close()
++
++		for res.NextResultSet(ctx) {
++			for res.NextRow() {
++				var path, accessType string
++				err = res.ScanNamed(
++					named.Required("path", &path),
++					named.Required("access_type", &accessType),
++				)
++				if err != nil {
++					return err
++				}
++				permissions[path] = accessType
++			}
++		}
++		return res.Err()
++	})
++
++	if err != nil {
++		return nil, err
++	}
++	return permissions, nil
++}
++
++func (s *YdbStore) LogFileView(ctx context.Context, userID uint64, fileKey string) error {
++	query := `
++		DECLARE $user_id AS Uint64;
++		DECLARE $file_key AS Utf8;
++		DECLARE $last_viewed_at AS Timestamp;
++
++		UPSERT INTO file_view_logs (user_id, file_key, last_viewed_at)
++		VALUES ($user_id, $file_key, $last_viewed_at);
++	`
++	ts := time.Now()
++	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
++		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
++			table.NewQueryParameters(
++				table.ValueParam("$user_id", types.Uint64Value(userID)),
++				table.ValueParam("$file_key", types.UTF8Value(fileKey)),
++				table.ValueParam("$last_viewed_at", types.TimestampValueFromTime(ts)),
++			),
++		)
++		return err
++	})
++}
++
++func (s *YdbStore) GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error) {
++	if len(fileKeys) == 0 {
++		return make(map[string]time.Time), nil
++	}
++
++	viewTimes := make(map[string]time.Time)
++
++	keyList := make([]types.Value, len(fileKeys))
++	for i, key := range fileKeys {
++		keyList[i] = types.UTF8Value(key)
++	}
++
++	query := `
++		DECLARE $user_id AS Uint64;
++		DECLARE $file_keys AS List<Utf8>;
++
++		SELECT file_key, last_viewed_at
++		FROM file_view_logs
++		WHERE user_id = $user_id AND file_key IN $file_keys;
++	`
++	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
++		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
++			table.NewQueryParameters(
++				table.ValueParam("$user_id", types.Uint64Value(userID)),
++				table.ValueParam("$file_keys", types.ListValue(keyList...)),
++			),
++		)
++		if err != nil {
++			return err
++		}
++		defer res.Close()
++
++		for res.NextResultSet(ctx) {
++			for res.NextRow() {
++				var fileKey string
++				var lastViewedAt time.Time
++				err = res.Scan(
++					&fileKey,
++					&lastViewedAt,
++				)
++				if err != nil {
++					return err
++				}
++				viewTimes[fileKey] = lastViewedAt
++			}
++		}
++		return res.Err()
++	})
++
++	if err != nil {
++		return nil, err
++	}
++	return viewTimes, nil
++}
++
+ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error) {
+ 	var users []models.User
+ 
+diff --git a/models/models.go b/models/models.go
+index 8011182..4819777 100644
+--- a/models/models.go
++++ b/models/models.go
+@@ -28,15 +28,19 @@
+ 	Password string `json:"password"`
+ }
+ 
+-type FileWithURL struct {
+-	Key string `json:"key"`
+-	URL string `json:"url"`
++type FileInfo struct {
++	Key          string     `json:"key"`
++	URL          string     `json:"url,omitempty"`
++	CreatedAt    *time.Time `json:"createdAt,omitempty"`
++	AccessType   string     `json:"accessType,omitempty"` // "read_only", "read_and_download"
++	LastViewedAt *time.Time `json:"lastViewedAt,omitempty"`
+ }
+ 
+ type ListFilesResponse struct {
+ 	Path    string        `json:"path"`
+ 	Folders []string      `json:"folders"`
+-	Files   []FileWithURL `json:"files"`
++	Files   []FileInfo `json:"files"`
+ }
+ 
+ type CreateUserRequest struct {
+diff --git a/s3/client.go b/s3/client.go
+index 687611a..0127278 100644
+--- a/s3/client.go
++++ b/s3/client.go
+@@ -21,9 +21,14 @@
+ 	BucketName    string
+ }
+ 
++type S3File struct {
++	Key          string
++	LastModified time.Time
++}
++
+ type ListObjectsOutput struct {
+ 	Folders []string
+-	Files   []string
++	Files   []S3File
+ }
+ 
+ func NewClient(appCfg *appconfig.Config) *Client {
+@@ -66,10 +71,10 @@
+ 		return nil, err
+ 	}
+ 
+-	var files []string
++	var files []S3File
+ 	for _, item := range result.Contents {
+-		if *item.Key != prefix {
+-			files = append(files, *item.Key)
++		if *item.Key != prefix && item.LastModified != nil && item.Size != nil && *item.Size > 0 {
++			files = append(files, S3File{Key: *item.Key, LastModified: *item.LastModified})
+ 		}
+ 	}
+ 
+diff --git a/schema/schema.sql b/schema/schema.sql
+new file mode 100644
+index 0000000..881177b
+--- /dev/null
++++ b/schema/schema.sql
+@@ -0,0 +1,12 @@
++-- YDB YQL
++CREATE TABLE file_permissions (
++    path Utf8,
++    access_type Utf8, -- "read_only" or "read_and_download"
++    PRIMARY KEY (path)
++);
++
++CREATE TABLE file_view_logs (
++    user_id Uint64,
++    file_key Utf8,
++    last_viewed_at Timestamp,
++    PRIMARY KEY (user_id, file_key)
++);

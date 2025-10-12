@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marketconnect/bfe-sl/auth"
@@ -25,11 +26,11 @@ import (
 )
 
 type Handler struct {
-	Store      db.Store
-	S3Client   *s3.Client
+	Store       db.Store
+	S3Client    *s3.Client
 	EmailClient *email.Client
-	JwtSecret  string
-	PreSignTTL time.Duration
+	JwtSecret   string
+	PreSignTTL  time.Duration
 }
 
 // Auth Handlers
@@ -896,7 +897,7 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, models.ListFilesResponse{
 			Path:    "/",
 			Folders: []string{},
-			Files:   []models.FileWithURL{},
+			Files:   []models.FileInfo{},
 		})
 		return
 	}
@@ -914,10 +915,75 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
 				return
 			}
-			files := make([]models.FileWithURL, 0, len(listOutput.Files))
-			for _, key := range listOutput.Files {
-				files = append(files, models.FileWithURL{Key: key})
+
+			// --- Enrich files with metadata ---
+			fileKeys := make([]string, 0, len(listOutput.Files))
+			pathsToCheckSet := make(map[string]struct{})
+			for _, file := range listOutput.Files {
+				fileKeys = append(fileKeys, file.Key)
+				pathsToCheckSet[file.Key] = struct{}{}
+				currentPath := file.Key
+				for {
+					currentPath = path.Dir(currentPath)
+					if currentPath == "." || currentPath == "/" {
+						break
+					}
+					folderPath := currentPath + "/"
+					if _, exists := pathsToCheckSet[folderPath]; !exists {
+						pathsToCheckSet[folderPath] = struct{}{}
+					}
+				}
 			}
+			pathsToCheck := make([]string, 0, len(pathsToCheckSet))
+			for p := range pathsToCheckSet {
+				pathsToCheck = append(pathsToCheck, p)
+			}
+
+			filePerms, err := h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
+				return
+			}
+			viewTimes, err := h.Store.GetLastViewTimes(c.Request.Context(), userID, fileKeys)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve view logs", "details": err.Error()})
+				return
+			}
+
+			files := make([]models.FileInfo, 0, len(listOutput.Files))
+			for _, file := range listOutput.Files {
+				accessType := "read_and_download" // Default
+				if val, ok := filePerms[file.Key]; ok {
+					accessType = val
+				} else {
+					currentPath := file.Key
+					for {
+						currentPath = path.Dir(currentPath)
+						if currentPath == "." || currentPath == "/" {
+							break
+						}
+						folderPath := currentPath + "/"
+						if val, ok := filePerms[folderPath]; ok {
+							accessType = val
+							break
+						}
+					}
+				}
+
+				var lastViewedAt *time.Time
+				if vt, ok := viewTimes[file.Key]; ok {
+					lastViewedAt = &vt
+				}
+				createdAt := file.LastModified
+
+				files = append(files, models.FileInfo{
+					Key:          file.Key,
+					CreatedAt:    &createdAt,
+					AccessType:   accessType,
+					LastViewedAt: lastViewedAt,
+				})
+			}
+
 			c.JSON(http.StatusOK, models.ListFilesResponse{
 				Path:    "/", // Path is still root
 				Folders: listOutput.Folders,
@@ -936,7 +1002,7 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, models.ListFilesResponse{
 			Path:    "/",
 			Folders: rootFolders,
-			Files:   []models.FileWithURL{},
+			Files:   []models.FileInfo{},
 		})
 		return
 	}
@@ -963,11 +1029,97 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 		return
 	}
 
-	// Возвращаем только ключи; url оставляем пустым — фронт получит свежий через /files/presign
-	files := make([]models.FileWithURL, 0, len(listOutput.Files))
-	for _, key := range listOutput.Files {
-		files = append(files, models.FileWithURL{Key: key})
+	// --- Enrich files with metadata ---
+
+	// 1. Collect all paths for which we need metadata
+	fileKeys := make([]string, 0, len(listOutput.Files))
+	pathsToCheckSet := make(map[string]struct{})
+	for _, file := range listOutput.Files {
+		fileKeys = append(fileKeys, file.Key)
+		pathsToCheckSet[file.Key] = struct{}{}
+		currentPath := file.Key
+		for {
+			currentPath = path.Dir(currentPath)
+			if currentPath == "." || currentPath == "/" {
+				break
+			}
+			folderPath := currentPath + "/"
+			if _, exists := pathsToCheckSet[folderPath]; !exists {
+				pathsToCheckSet[folderPath] = struct{}{}
+			}
+		}
 	}
+	pathsToCheck := make([]string, 0, len(pathsToCheckSet))
+	for p := range pathsToCheckSet {
+		pathsToCheck = append(pathsToCheck, p)
+	}
+
+	// 2. Fetch metadata from DB in parallel
+	var filePerms map[string]string
+	var viewTimes map[string]time.Time
+	var permsErr, viewsErr error
+
+	wg := sync.WaitGroup{}
+	if len(pathsToCheck) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			filePerms, permsErr = h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
+		}()
+	}
+	if len(fileKeys) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			viewTimes, viewsErr = h.Store.GetLastViewTimes(c.Request.Context(), userID, fileKeys)
+		}()
+	}
+	wg.Wait()
+
+	if permsErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": permsErr.Error()})
+		return
+	}
+	if viewsErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve view logs", "details": viewsErr.Error()})
+		return
+	}
+
+	// 3. Construct response
+	files := make([]models.FileInfo, 0, len(listOutput.Files))
+	for _, file := range listOutput.Files {
+		accessType := "read_and_download" // Default
+		if val, ok := filePerms[file.Key]; ok {
+			accessType = val
+		} else {
+			currentPath := file.Key
+			for {
+				currentPath = path.Dir(currentPath)
+				if currentPath == "." || currentPath == "/" {
+					break
+				}
+				folderPath := currentPath + "/"
+				if val, ok := filePerms[folderPath]; ok {
+					accessType = val
+					break
+				}
+			}
+		}
+
+		var lastViewedAt *time.Time
+		if vt, ok := viewTimes[file.Key]; ok {
+			lastViewedAt = &vt
+		}
+		createdAt := file.LastModified
+
+		files = append(files, models.FileInfo{
+			Key:          file.Key,
+			CreatedAt:    &createdAt,
+			AccessType:   accessType,
+			LastViewedAt: lastViewedAt,
+		})
+	}
+	// --- End of metadata enrichment ---
 
 	c.JSON(http.StatusOK, models.ListFilesResponse{
 		Path:    requestedPath,
@@ -1176,6 +1328,11 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 	}
 
 	for key := range allKeys {
+		// Log the view for each file included in the archive
+		if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
+			log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
+			// Do not fail the download, just log the error
+		}
 		obj, err := h.S3Client.GetObject(key)
 		if err != nil {
 			log.Printf("Error getting object %s: %v", key, err)
@@ -1255,6 +1412,8 @@ func (h *Handler) PresignFileHandler(c *gin.Context) {
 		return
 	}
 	userID := userIDVal.(uint64)
+	isAdminVal, _ := c.Get("isAdmin")
+	isAdmin := isAdminVal.(bool)
 
 	key := c.Query("key")
 	if key == "" {
@@ -1278,6 +1437,46 @@ func (h *Handler) PresignFileHandler(c *gin.Context) {
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
+	}
+
+	// Log the view action
+	if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
+		log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
+		// Do not fail the request, just log the error
+	}
+
+	// Check for read-only access for non-admins
+	if !isAdmin {
+		// Hierarchically check permissions
+		pathsToCheck := []string{key}
+		currentPath := key
+		for {
+			currentPath = path.Dir(currentPath)
+			if currentPath == "." || currentPath == "/" {
+				break
+			}
+			pathsToCheck = append(pathsToCheck, currentPath+"/")
+		}
+
+		perms, err := h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
+			return
+		}
+
+		accessType := "read_and_download" // Default
+		for _, p := range pathsToCheck {
+			if val, ok := perms[p]; ok {
+				accessType = val
+				break // Most specific permission found
+			}
+		}
+
+		if accessType == "read_only" {
+			convertedPath := path.Join("converted", key)
+			c.JSON(http.StatusOK, gin.H{"convertedPath": convertedPath})
+			return
+		}
 	}
 
 	u, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTL)

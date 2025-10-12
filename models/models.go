@@ -3,18 +3,18 @@ package models
 import "time"
 
 type User struct {
-	ID           uint64           `json:"id,string"`
-	CreatedAt    *time.Time       `json:"createdAt"`
-	UpdatedAt    *time.Time       `json:"updatedAt"`
-	Username     string           `json:"username"`
-	Alias        *string          `json:"alias,omitempty"`
-	Email        *string          `json:"email,omitempty"`
-	VersionCheck string           `json:"-"`
-	PasswordHash string           `json:"-"`
-	IsAdmin      bool             `json:"isAdmin"`
-	NotifyByEmail bool            `json:"notifyByEmail"`
-	Permissions  []UserPermission `json:"permissions"`
-	CreatedBy    *uint64          `json:"createdBy,string,omitempty"`
+	ID            uint64           `json:"id,string"`
+	CreatedAt     *time.Time       `json:"createdAt"`
+	UpdatedAt     *time.Time       `json:"updatedAt"`
+	Username      string           `json:"username"`
+	Alias         *string          `json:"alias,omitempty"`
+	Email         *string          `json:"email,omitempty"`
+	VersionCheck  string           `json:"-"`
+	PasswordHash  string           `json:"-"`
+	IsAdmin       bool             `json:"isAdmin"`
+	NotifyByEmail bool             `json:"notifyByEmail"`
+	Permissions   []UserPermission `json:"permissions"`
+	CreatedBy     *uint64          `json:"createdBy,string,omitempty"`
 }
 
 type UserPermission struct {
@@ -30,23 +30,26 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-type FileWithURL struct {
-	Key string `json:"key"`
-	URL string `json:"url"`
+type FileInfo struct {
+	Key          string     `json:"key"`
+	URL          string     `json:"url,omitempty"`
+	CreatedAt    *time.Time `json:"createdAt,omitempty"`
+	AccessType   string     `json:"accessType,omitempty"` // "read_only", "read_and_download"
+	LastViewedAt *time.Time `json:"lastViewedAt,omitempty"`
 }
 
 type ListFilesResponse struct {
-	Path    string        `json:"path"`
-	Folders []string      `json:"folders"`
-	Files   []FileWithURL `json:"files"`
+	Path    string     `json:"path"`
+	Folders []string   `json:"folders"`
+	Files   []FileInfo `json:"files"`
 }
 
 type CreateUserRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Alias    string `json:"alias"`
-	Email    string `json:"email"`
-	IsAdmin  bool   `json:"is_admin"`
+	Username        string `json:"username" binding:"required"`
+	Password        string `json:"password" binding:"required"`
+	Alias           string `json:"alias"`
+	Email           string `json:"email"`
+	IsAdmin         bool   `json:"is_admin"`
 	NotifyByEmail   bool   `json:"notifyByEmail"`
 	SendAuthByEmail bool   `json:"sendAuthByEmail"`
 }

@@ -42,11 +42,11 @@ func init() {
 	seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
-		Store:      store,
-		S3Client:   s3Client,
+		Store:       store,
+		S3Client:    s3Client,
 		EmailClient: emailClient,
-		JwtSecret:  cfg.JWTSecretKey,
-		PreSignTTL: time.Duration(cfg.PresignTTLSeconds) * time.Second,
+		JwtSecret:   cfg.JWTSecretKey,
+		PreSignTTL:  time.Duration(cfg.PresignTTLSeconds) * time.Second,
 	}
 
 	router = gin.New()
@@ -110,7 +110,7 @@ func init() {
 				adminRoutes.DELETE("/users/:id", handler.DeleteUserHandler)
 				adminRoutes.POST("/users/:id/password", handler.ResetUserPasswordHandler)
 				adminRoutes.PUT("/users/:id", handler.UpdateUserNotifyHandler)
-		adminRoutes.POST("/permissions", handler.AssignPermissionHandler)
+				adminRoutes.POST("/permissions", handler.AssignPermissionHandler)
 				adminRoutes.DELETE("/permissions/:id", handler.RevokePermissionHandler)
 				adminRoutes.GET("/storage/folders", handler.ListAllFoldersHandler)
 				adminRoutes.POST("/storage/folders", handler.CreateFolderHandler)
