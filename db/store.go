@@ -33,6 +33,8 @@ type Store interface {
 	GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error)
 	LogFileView(ctx context.Context, userID uint64, fileKey string) error
 	GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error)
+	GetPermissionsForUsers(ctx context.Context, userIDs []uint64) (map[uint64][]models.UserPermission, error)
+	GetViewLogsForUsersAndFiles(ctx context.Context, userIDs []uint64, fileKeys []string) (map[string]map[uint64]time.Time, error)
 	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
 	GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error)
 	UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error
@@ -340,16 +342,18 @@ func (s *YdbStore) GetLastViewTimes(ctx context.Context, userID uint64, fileKeys
 
 		for res.NextResultSet(ctx) {
 			for res.NextRow() {
-				var fileKey string
-				var lastViewedAt time.Time
-				err = res.Scan(
-					&fileKey,
-					&lastViewedAt,
+				var fileKey *string
+				var lastViewedAt *time.Time
+				err = res.ScanNamed(
+					named.Optional("file_key", &fileKey),
+					named.Optional("last_viewed_at", &lastViewedAt),
 				)
 				if err != nil {
 					return err
 				}
-				viewTimes[fileKey] = lastViewedAt
+				if fileKey != nil && lastViewedAt != nil {
+					viewTimes[*fileKey] = *lastViewedAt
+				}
 			}
 		}
 		return res.Err()
@@ -359,6 +363,134 @@ func (s *YdbStore) GetLastViewTimes(ctx context.Context, userID uint64, fileKeys
 		return nil, err
 	}
 	return viewTimes, nil
+}
+
+func (s *YdbStore) GetPermissionsForUsers(ctx context.Context, userIDs []uint64) (map[uint64][]models.UserPermission, error) {
+	if len(userIDs) == 0 {
+		return make(map[uint64][]models.UserPermission), nil
+	}
+
+	resultMap := make(map[uint64][]models.UserPermission)
+	for _, id := range userIDs {
+		resultMap[id] = []models.UserPermission{}
+	}
+
+	idList := make([]types.Value, len(userIDs))
+	for i, id := range userIDs {
+		idList[i] = types.Uint64Value(id)
+	}
+
+	query := `
+		DECLARE $user_ids AS List<Uint64>;
+		SELECT id, created_at, updated_at, user_id, folder_prefix
+		FROM user_permissions
+		WHERE user_id IN $user_ids;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$user_ids", types.ListValue(idList...)),
+			),
+		)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for res.NextResultSet(ctx) {
+			for res.NextRow() {
+				var p models.UserPermission
+				err = res.Scan(
+					&p.ID,
+					&p.CreatedAt,
+					&p.UpdatedAt,
+					&p.UserID,
+					&p.FolderPrefix,
+				)
+				if err != nil {
+					return fmt.Errorf("scan failed for permission: %w", err)
+				}
+				resultMap[p.UserID] = append(resultMap[p.UserID], p)
+			}
+		}
+		return res.Err()
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("ydb query failed in GetPermissionsForUsers: %w", err)
+	}
+
+	return resultMap, nil
+}
+
+func (s *YdbStore) GetViewLogsForUsersAndFiles(ctx context.Context, userIDs []uint64, fileKeys []string) (map[string]map[uint64]time.Time, error) {
+	if len(userIDs) == 0 || len(fileKeys) == 0 {
+		return make(map[string]map[uint64]time.Time), nil
+	}
+
+	resultMap := make(map[string]map[uint64]time.Time)
+
+	userIDList := make([]types.Value, len(userIDs))
+	for i, id := range userIDs {
+		userIDList[i] = types.Uint64Value(id)
+	}
+
+	fileKeyList := make([]types.Value, len(fileKeys))
+	for i, key := range fileKeys {
+		fileKeyList[i] = types.UTF8Value(key)
+	}
+
+	query := `
+		DECLARE $user_ids AS List<Uint64>;
+		DECLARE $file_keys AS List<Utf8>;
+
+		SELECT user_id, file_key, last_viewed_at
+		FROM file_view_logs
+		WHERE user_id IN $user_ids AND file_key IN $file_keys;
+	`
+	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$user_ids", types.ListValue(userIDList...)),
+				table.ValueParam("$file_keys", types.ListValue(fileKeyList...)),
+			),
+		)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+
+		for res.NextResultSet(ctx) {
+			for res.NextRow() {
+				var userID *uint64
+				var fileKey *string
+				var lastViewedAt *time.Time
+				err = res.ScanNamed(
+					named.Optional("user_id", &userID),
+					named.Optional("file_key", &fileKey),
+					named.Optional("last_viewed_at", &lastViewedAt),
+				)
+				if err != nil {
+					return err
+				}
+
+				if userID == nil || fileKey == nil || lastViewedAt == nil {
+					continue
+				}
+
+				if _, ok := resultMap[*fileKey]; !ok {
+					resultMap[*fileKey] = make(map[uint64]time.Time)
+				}
+				resultMap[*fileKey][*userID] = *lastViewedAt
+			}
+		}
+		return res.Err()
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return resultMap, nil
 }
 
 func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error) {
@@ -410,18 +542,38 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 					return err
 				}
 
-				permissions, err := s.GetUserPermissions(ctx, u.ID)
-				if err != nil {
-					return err
-				}
-				u.Permissions = permissions
 				users = append(users, u)
 			}
 		}
 		return res.Err()
 	})
 
-	return users, err
+	if err != nil {
+		return nil, err
+	}
+	if len(users) == 0 {
+		return []models.User{}, nil
+	}
+
+	userIDs := make([]uint64, len(users))
+	userMap := make(map[uint64]*models.User, len(users))
+	for i := range users {
+		userIDs[i] = users[i].ID
+		userMap[users[i].ID] = &users[i]
+	}
+
+	allPermissions, err := s.GetPermissionsForUsers(ctx, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get permissions for users: %w", err)
+	}
+
+	for userID, perms := range allPermissions {
+		if user, ok := userMap[userID]; ok {
+			user.Permissions = perms
+		}
+	}
+
+	return users, nil
 }
 
 func (s *YdbStore) GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error) {

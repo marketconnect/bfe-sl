@@ -4,10 +4,11 @@ info:
   title: BFE-SL File Management API
   description: |-
     API for managing files, users, and permissions with a two-tier admin system.
-    - **Super Admin (ID=1):** Has complete control over the system, including creating other admins.
-    - **Admin:** Can create non-admin users, manage their own folder, and assign permissions to their users within that folder.
-    - **User:** Can access files and folders they have been granted permission to.
+    - Super Admin (ID=1): Has complete control over the system, including creating other admins.
+    - Admin: Can create non-admin users, manage their own folder, and assign permissions to their users within that folder.
+    - User: Can access files and folders they have been granted permission to.
   version: 1.0.0
+
 servers:
   - url: /api/v1
     description: API version 1
@@ -39,1008 +40,571 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/LoginRequest'
-        responses:
-          '200':
-            description: Login successful.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/LoginSuccessResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /files:
-      get:
-        tags:
-          - File Management
-        summary: List files and folders
-        description: |-
-          Lists the contents of a specified path.
-          - If no `path` is provided, it returns the root folders the user has access to. For a regular admin (not superadmin), it returns the contents of their personal root folder, while the response path remains `/`.
-          - The user must have permission for the requested path.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: path
-            in: query
-            description: The folder path to list. e.g., `123/subfolder/`
-            required: false
-            schema:
-              type: string
-        responses:
-          '200':
-            description: Successfully retrieved folder contents.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ListFilesResponse'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /files/generate-upload-url:
-      post:
-        tags:
-          - File Management
-        summary: Generate a presigned URL for file upload
-        description: Creates a temporary, secure URL that can be used to upload a file directly to S3 storage. The user must have permission to the target prefix.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
+      responses:
+        '200':
+          description: Login successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GenerateUploadURLRequest'
-        responses:
-          '200':
-            description: Presigned URL generated successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/GenerateUploadURLResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+                $ref: '#/components/schemas/LoginSuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /files/{key}:
-      get:
-        tags:
-          - File Management
-        summary: Download a file directly
-        description: Downloads the content of a specific file directly. The user must have permission to access the file's path.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: key
-            in: path
-            description: The full object key of the file in S3. e.g., `123/subfolder/document.pdf`
-            required: true
-            schema:
-              type: string
-        responses:
-          '200':
-            description: File content returned successfully.
-            content:
-              '*/*':
-                schema:
-                  type: string
-                  format: binary
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      put:
-        tags:
-          - File Management
-        summary: Update/rename a file
-        description: Updates or renames a specific file. The user must have permission to modify the file's path.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: key
-            in: path
-            description: The current full object key of the file in S3. e.g., `123/subfolder/document.pdf`
-            required: true
-            schema:
-              type: string
-        requestBody:
-          required: true
+  /files:
+    get:
+      tags:
+        - File Management
+      summary: List files and folders
+      description: |-
+        Lists the contents of a specified path.
+        - If no path is provided, it returns the root folders the user has access to.
+        - For a regular admin (not superadmin), it returns the contents of their personal root folder, while the response path remains "/".
+        - The user must have permission for the requested path.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          description: The folder path to list, e.g. 123/subfolder/
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved folder contents.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UpdateFileRequest'
-        responses:
-          '200':
-            description: File updated successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/UpdateFileResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '409':
-            description: A name conflict occurred that could not be resolved automatically.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      delete:
-        tags:
-          - File Management
-        summary: Delete a specific file
-        description: Deletes a specific file. The user must have permission to delete from the file's path.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: key
-            in: path
-            description: The full object key of the file in S3. e.g., `123/subfolder/document.pdf`
-            required: true
+                $ref: '#/components/schemas/ListFilesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /files/generate-upload-url:
+    post:
+      tags:
+        - File Management
+      summary: Generate a presigned URL for file upload
+      description: Creates a temporary, secure URL to upload a file directly to storage. The user must have permission to the target prefix.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+              $ref: '#/components/schemas/GenerateUploadURLRequest'
+      responses:
+        '200':
+          description: Presigned URL generated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateUploadURLResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /files/presign:
-      get:
-        tags:
-          - File Management
-        summary: Get a presigned URL for file download
-        description: Creates a temporary, secure URL to download a specific file. The user must have permission to access the file's path. For read-only access, returns a convertedPath instead of direct URL.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: key
-            in: query
-            description: The full object key of the file in S3. e.g., `123/subfolder/document.pdf`
-            required: true
+  /files/presign:
+    get:
+      tags:
+        - File Management
+      summary: Get a presigned URL for file download
+      description: Creates a temporary, secure URL to download a specific file. For read-only access, returns a convertedPath instead of a direct URL.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: query
+          description: The full object key of the file in storage (e.g., 123/subfolder/document.pdf)
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Presigned URL or converted path returned successfully.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PresignResponse'
+                  - $ref: '#/components/schemas/ConvertedPathResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /archive:
+    post:
+      tags:
+        - File Management
+      summary: Download multiple files or folders as a zip archive
+      description: Creates and streams a zip archive containing the specified files and folders. The user must have permission for all requested items.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-        responses:
-          '200':
-            description: Presigned URL or converted path returned successfully.
-            content:
-              application/json:
-                schema:
-                  oneOf:
-                    - $ref: '#/components/schemas/PresignResponse'
-                    - $ref: '#/components/schemas/ConvertedPathResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+              $ref: '#/components/schemas/ArchiveRequest'
+      responses:
+        '200':
+          description: Zip archive is streamed as the response.
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
-    /files/move:
-      post:
-        tags:
-          - File Management
-        summary: Move a single file
-        description: Moves a specific file to a new destination. The user must have permission to access both source and destination paths.
-        security:
-          - BearerAuth: []
-        requestBody:
+  /archive/status/{jobId}:
+    get:
+      tags:
+        - File Management
+      summary: Get archive job status
+      description: Retrieves the status and optional download URL for a background archive job.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
           required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Archive job status retrieved.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MoveFileRequest'
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '409':
-            description: A name conflict occurred that could not be resolved automatically.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+                $ref: '#/components/schemas/GetArchiveStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /files/copy:
-      post:
-        tags:
-          - File Management
-        summary: Copy a single file
-        description: Copies a specific file to a new destination. The user must have permission to access both source and destination paths.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CopyFileRequest'
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '409':
-            description: A name conflict occurred that could not be resolved automatically.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /archive:
-      post:
-        tags:
-          - File Management
-        summary: Download multiple files/folders as a zip archive
-        description: Creates and streams a zip archive containing the specified files and contents of specified folders. The user must have permission for all requested items.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ArchiveRequest'
-        responses:
-          '200':
-            description: Zip archive is streamed as the response.
-            content:
-              application/zip:
-                schema:
-                  type: string
-                  format: binary
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-
-    /admin/users:
-      get:
-        tags:
-          - Admin - User Management
-        summary: List users
-        description: |-
-          Retrieves a list of users.
-          - **Super Admin:** Sees all users in the system.
-          - **Admin:** Sees only the users they have created.
-        security:
-          - BearerAuth: []
-        responses:
-          '200':
-            description: A list of users.
-            content:
-              application/json:
-                schema:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/User'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      post:
-        tags:
-          - Admin - User Management
-        summary: Create a new user
-        description: |-
-          Creates a new user account.
-          - **Super Admin:** Can create both admins (`isAdmin: true`) and regular users.
-          - **Admin:** Can only create regular users (`isAdmin: false`).
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CreateUserRequest'
-        responses:
-          '201':
-            description: User created successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/CreateUserResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '409':
-            description: Username is already taken.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/users/{id}:
-      get:
-        tags:
-          - Admin - User Management
-        summary: Get user details
-        description: |-
-          Retrieves details for a specific user.
-          - **Super Admin:** Can view any user's details.
-          - **Admin:** Can only view details for users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the user to retrieve.
-            required: true
+  /admin/self:
+    put:
+      tags:
+        - Admin - Self Management
+      summary: Update own admin account
+      description: Allows an authenticated admin to update their own username, password, or email.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-              example: "123456789012345678"
-        responses:
-          '200':
-            description: User details retrieved successfully.
-            content:
-              application/json:
-                schema:
+              $ref: '#/components/schemas/UpdateAdminRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admin/users:
+    get:
+      tags:
+        - Admin - User Management
+      summary: List users
+      description: |-
+        Retrieves a list of users.
+        - Super Admin: Sees all users in the system.
+        - Admin: Sees only the users they have created.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: A list of users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
                   $ref: '#/components/schemas/User'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      put:
-        tags:
-          - Admin - User Management
-        summary: Update a user
-        description: |-
-          Updates an existing user account.
-          - **Super Admin:** Can update any user.
-          - **Admin:** Can only update users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the user to update.
-            required: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags:
+        - Admin - User Management
+      summary: Create a new user
+      description: |-
+        Creates a new user account.
+        - Super Admin: Can create both admins (is_admin: true) and regular users.
+        - Admin: Can only create regular users (is_admin: false).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-              example: "123456789012345678"
-        requestBody:
-          required: true
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created successfully.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UpdateUserRequest'
-        responses:
-          '200':
-            description: User updated successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/User'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '409':
-            description: Username is already taken.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      delete:
-        tags:
-          - Admin - User Management
-        summary: Delete a user
-        description: |-
-          Deletes a user and all their associated permissions.
-          - **Super Admin:** Can delete any user.
-          - **Admin:** Can only delete users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the user to delete.
-            required: true
-            schema:
-              type: string
-              example: "123456789012345678"
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+                $ref: '#/components/schemas/CreateUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /admin/users/{id}/permissions:
-      get:
-        tags:
-          - Admin - User Management
-        summary: Get user permissions
-        description: |-
-          Retrieves all permissions assigned to a specific user.
-          - **Super Admin:** Can view permissions for any user.
-          - **Admin:** Can only view permissions for users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the user.
-            required: true
-            schema:
-              type: string
-              example: "123456789012345678"
-        responses:
-          '200':
-            description: User permissions retrieved successfully.
-            content:
-              application/json:
-                schema:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/UserPermission'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/users/{id}/password:
-      post:
-        tags:
-          - Admin - User Management
-        summary: Reset a user's password
-        description: |-
-          Sets a new password for a specified user.
-          - **Super Admin:** Can reset any user's password.
-          - **Admin:** Can only reset passwords for users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the user whose password will be reset.
-            required: true
-            schema:
-              type: string
-        requestBody:
+  /admin/users/{id}:
+    delete:
+      tags:
+        - Admin - User Management
+      summary: Delete a user
+      description: |-
+        Deletes a user and all their associated permissions.
+        - Super Admin: Can delete any user.
+        - Admin: Can only delete users they have created.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: The ID of the user to delete.
           required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      tags:
+        - Admin - User Management
+      summary: Update a user's notification preference
+      description: Updates the notifyByEmail setting for a user created by the admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: The ID of the user to update.
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserNotifyRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admin/users/{id}/password:
+    post:
+      tags:
+        - Admin - User Management
+      summary: Reset a user's password
+      description: |-
+        Sets a new password for a specified user.
+        - Super Admin: Can reset any user's password.
+        - Admin: Can only reset passwords for users they have created.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: The ID of the user whose password will be reset.
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '200':
+          description: Password reset successfully. The new password is returned for convenience.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResetPasswordRequest'
-        responses:
-          '200':
-            description: Password reset successfully. The new password is returned for convenience.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ResetPasswordResponse'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+                $ref: '#/components/schemas/ResetPasswordResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /admin/self:
-      put:
-        tags:
-          - Admin - Self Management
-        summary: Update own admin account
-        description: Allows an authenticated admin to update their own username, password, or email.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UpdateAdminRequest'
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '409':
-            description: Username is already taken.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/permissions:
-      get:
-        tags:
-          - Admin - Permission Management
-        summary: List all permissions
-        description: |-
-          Retrieves a list of all permissions.
-          - **Super Admin:** Sees all permissions in the system.
-          - **Admin:** Sees only permissions related to users they have created.
-        security:
-          - BearerAuth: []
-        responses:
-          '200':
-            description: A list of permissions.
-            content:
-              application/json:
-                schema:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/UserPermission'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      post:
-        tags:
-          - Admin - Permission Management
-        summary: Assign a folder permission to a user
-        description: |-
-          Grants a user access to a specific folder prefix.
-          - **Super Admin:** Can assign any folder to any user.
-          - **Admin:** Can only assign subfolders of their own root folder to users they have created.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AssignPermissionRequest'
-        responses:
-          '201':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/permissions/user/{userId}:
-      get:
-        tags:
-          - Admin - Permission Management
-        summary: Get permissions for a user
-        description: |-
-          Retrieves all permissions for a specific user.
-          - **Super Admin:** Can view permissions for any user.
-          - **Admin:** Can only view permissions for users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: userId
-            in: path
-            description: The ID of the user.
-            required: true
+  /admin/permissions:
+    post:
+      tags:
+        - Admin - Permission Management
+      summary: Assign a folder permission to a user
+      description: |-
+        Grants a user access to a specific folder prefix.
+        - Super Admin: Can assign any folder to any user.
+        - Admin: Can only assign subfolders of their own root folder to users they have created.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-              example: "123456789012345678"
-        responses:
-          '200':
-            description: Permissions for the user retrieved successfully.
-            content:
-              application/json:
-                schema:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/UserPermission'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+              $ref: '#/components/schemas/AssignPermissionRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /admin/permissions/{id}:
-      get:
-        tags:
-          - Admin - Permission Management
-        summary: Get a specific permission
-        description: |-
-          Retrieves details for a specific permission.
-          - **Super Admin:** Can view any permission.
-          - **Admin:** Can view any permission (since admin permissions are not granular).
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the permission to retrieve.
-            required: true
-            schema:
-              type: string
-        responses:
-          '200':
-            description: Permission details retrieved successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/UserPermission'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      put:
-        tags:
-          - Admin - Permission Management
-        summary: Update a specific permission
-        description: |-
-          Updates a specific permission.
-          - **Super Admin:** Can update any permission.
-          - **Admin:** Can update any permission related to users they have created.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the permission to update.
-            required: true
-            schema:
-              type: string
-        requestBody:
+  /admin/permissions/{id}:
+    delete:
+      tags:
+        - Admin - Permission Management
+      summary: Revoke a permission
+      description: Revokes a specific permission by its ID.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: The ID of the permission to revoke.
           required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admin/storage/folders:
+    get:
+      tags:
+        - Admin - Storage Management
+      summary: List all available folders
+      description: |-
+        Retrieves a list of all folders in the storage bucket.
+        - Super Admin: Sees all folders.
+        - Admin: Sees only folders within their own root directory (e.g., 123/...).
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: A list of folder prefixes.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UpdatePermissionRequest'
-        responses:
-          '200':
-            description: Permission updated successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/UserPermission'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      delete:
-        tags:
-          - Admin - Permission Management
-        summary: Revoke a permission
-        description: |-
-          Revokes a specific permission by its ID.
-          - **Note:** Access control is not granular here. Any admin can revoke any permission if they know the ID.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: id
-            in: path
-            description: The ID of the permission to revoke.
-            required: true
+                $ref: '#/components/schemas/ListFoldersResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags:
+        - Admin - Storage Management
+      summary: Create a new folder
+      description: |-
+        Creates a new folder (an empty object with a trailing slash) in the storage bucket.
+        - Super Admin: Can create a folder at any path.
+        - Admin: Can only create folders within their own root directory.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+              $ref: '#/components/schemas/CreateFolderRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /admin/storage/folders:
-      get:
-        tags:
-          - Admin - Storage Management
-        summary: List all available folders
-        description: |-
-          Retrieves a list of all folders in the S3 bucket.
-          - **Super Admin:** Sees all folders.
-          - **Admin:** Sees only folders within their own root directory (e.g., `123/...`).
-        security:
-          - BearerAuth: []
-        responses:
-          '200':
-            description: A list of folder prefixes.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ListFoldersResponse'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      post:
-        tags:
-          - Admin - Storage Management
-        summary: Create a new folder
-        description: |-
-          Creates a new folder (an empty object with a trailing slash) in the S3 bucket.
-          - **Super Admin:** Can create a folder at any path.
-          - **Admin:** Can only create folders within their own root directory.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CreateFolderRequest'
-        responses:
-          '201':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/storage/folders/{path}:
-      get:
-        tags:
-          - Admin - Storage Management
-        summary: Get folder details
-        description: |-
-          Retrieves details about a specific folder.
-          - **Super Admin:** Can view any folder.
-          - **Admin:** Can only view folders within their own root directory.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: path
-            in: path
-            description: The folder path to retrieve (must end with '/'). e.g., `123/subfolder/`
-            required: true
+  /admin/storage/move:
+    post:
+      tags:
+        - Admin - Storage Management
+      summary: Move files and folders
+      description: |-
+        Moves specified files and/or folders to a new destination.
+        - Super Admin: Can move any item to any path.
+        - Admin: Can only move items within their own root directory.
+        - If a name conflict occurs at the destination, the moved item will be renamed.
+        - The operation is not atomic.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-        responses:
-          '200':
-            description: Folder details retrieved successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/FolderDetails'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '404':
-            $ref: '#/components/responses/NotFound'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-      delete:
-        tags:
-          - Admin - Storage Management
-        summary: Delete a specific folder
-        description: |-
-          Deletes a specific folder and all its contents recursively.
-          - **Super Admin:** Can delete any folder at any path.
-          - **Admin:** Can only delete folders within their own root directory.
-        security:
-          - BearerAuth: []
-        parameters:
-          - name: path
-            in: path
-            description: The folder path to delete (must end with '/'). e.g., `123/subfolder/`
-            required: true
+              $ref: '#/components/schemas/MoveItemsRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /admin/storage/copy:
+    post:
+      tags:
+        - Admin - Storage Management
+      summary: Copy files and folders
+      description: |-
+        Copies specified files and/or folders to a new destination.
+        - Super Admin: Can copy any item to any path.
+        - Admin: Can only copy items within their own root directory.
+        - If a name conflict occurs at the destination, the copied item will be renamed.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema:
-              type: string
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/storage/move:
-      post:
-        tags:
-          - Admin - Storage Management
-        summary: Move files and folders
-        description: |-
-          Moves specified files and/or folders to a new destination.
-          - **Super Admin:** Can move any item to any path.
-          - **Admin:** Can only move items within their own root directory.
-          - If a name conflict occurs at the destination, the moved item will be renamed (e.g., `file.txt` becomes `file (1).txt`).
-          - The operation is not atomic. If an error occurs during the copy phase, the operation stops, and some files may have been copied while others have not.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
+              $ref: '#/components/schemas/MoveItemsRequest'
+      responses:
+        '200':
+          description: Items copied successfully.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MoveItemsRequest'
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '409':
-            description: A name conflict occurred that could not be resolved automatically.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+                $ref: '#/components/schemas/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
-    /admin/storage/copy:
-      post:
-        tags:
-          - Admin - Storage Management
-        summary: Copy files and folders
-        description: |-
-          Copies specified files and/or folders to a new destination.
-          - **Super Admin:** Can copy any item to any path.
-          - **Admin:** Can only copy items within their own root directory.
-          - If a name conflict occurs at the destination, the copied item will be renamed (e.g., `file.txt` becomes `file (1).txt`).
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MoveItemsRequest'
-        responses:
-          '200':
-            description: Items copied successfully.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '409':
-            description: A name conflict occurred that could not be resolved automatically.
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/ErrorResponse'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
-
-    /admin/storage/items:
-      delete:
-        tags:
-          - Admin - Storage Management
-        summary: Delete files and folders
-        description: |-
-          Deletes specified files and/or folders. Folder deletion is recursive.
-          - **Super Admin:** Can delete any item at any path.
-          - **Admin:** Can only delete items within their own root directory.
-          The operation is atomic; if any single item fails to delete, the process stops and an error is returned.
-        security:
-          - BearerAuth: []
-        requestBody:
-          required: true
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DeleteItemsRequest'
-        responses:
-          '200':
-            $ref: '#/components/responses/SuccessMessage'
-          '400':
-            $ref: '#/components/responses/BadRequest'
-          '401':
-            $ref: '#/components/responses/Unauthorized'
-          '403':
-            $ref: '#/components/responses/Forbidden'
-          '500':
-            $ref: '#/components/responses/InternalServerError'
+  /admin/storage/items:
+    delete:
+      tags:
+        - Admin - Storage Management
+      summary: Delete files and folders
+      description: |-
+        Deletes specified files and/or folders. Folder deletion is recursive.
+        - Super Admin: Can delete any item at any path.
+        - Admin: Can only delete items within their own root directory.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteItemsRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 components:
   securitySchemes:
@@ -1060,9 +624,11 @@ components:
         createdAt:
           type: string
           format: date-time
+          nullable: true
         updatedAt:
           type: string
           format: date-time
+          nullable: true
         username:
           type: string
         alias:
@@ -1074,6 +640,8 @@ components:
           nullable: true
         isAdmin:
           type: boolean
+        notifyByEmail:
+          type: boolean
         permissions:
           type: array
           items:
@@ -1084,349 +652,344 @@ components:
           nullable: true
           example: "1"
 
-      FileInfo:
-        type: object
-        properties:
-          key:
-            type: string
-            description: The file key/path in storage
-            example: "123/documents/report.pdf"
-          url:
-            type: string
-            description: Optional URL for the file; typically empty, use /files/presign to get a download URL
-            nullable: true
-            example: null
-          createdAt:
-            type: string
-            format: date-time
-            description: When the file was created/first uploaded
-            nullable: true
-            example: "2023-05-15T10:30:00Z"
-          accessType:
-            type: string
-            description: The access level for the file; either 'read_only' or 'read_and_download'
-            enum: ['read_only', 'read_and_download']
-            nullable: true
-            example: "read_and_download"
-          lastViewedAt:
-            type: string
-            format: date-time
-            description: When the file was last accessed by this user
-            nullable: true
-            example: "2023-05-16T14:22:45Z"
+    FileInfo:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The file key/path in storage
+          example: "123/documents/report.pdf"
+        url:
+          type: string
+          description: Optional URL for the file; typically empty, use /files/presign to get a download URL
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          description: When the file was created/first uploaded
+          nullable: true
+          example: "2023-05-15T10:30:00Z"
+        accessType:
+          type: string
+          description: The access level for the file
+          enum:
+            - read_only
+            - read_and_download
+          nullable: true
+          example: read_and_download
+        lastViewedAt:
+          type: string
+          format: date-time
+          description: When the file was last accessed by this user
+          nullable: true
+          example: "2023-05-16T14:22:45Z"
+        accessList:
+          type: array
+          description: List of users who have access to this file (admin only)
+          items:
+            $ref: '#/components/schemas/FileAccessInfo'
+          nullable: true
+          example:
+            - username: "john_doe"
+              alias: "John"
+              lastViewedAt: "2023-05-16T14:22:45Z"
 
-      UserPermission:
-        type: object
-        properties:
-          id:
-            type: string
-          createdAt:
-            type: string
-            format: date-time
-          updatedAt:
-            type: string
-            format: date-time
-          userId:
-            type: string
-          folderPrefix:
-            type: string
-            example: "15958461734691702294/"
+    UserPermission:
+      type: object
+      properties:
+        id:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        userId:
+          type: string
+        folderPrefix:
+          type: string
+          example: "15958461734691702294/"
 
-      LoginRequest:
-        type: object
-        required: [username, password]
-        properties:
-          username:
-            type: string
-          password:
-            type: string
-            format: password
+    FileAccessInfo:
+      type: object
+      properties:
+        username:
+          type: string
+          description: The username of the user who has access to the file
+          example: "john_doe"
+        alias:
+          type: string
+          description: The alias of the user (if set)
+          nullable: true
+          example: "John"
+        lastViewedAt:
+          type: string
+          format: date-time
+          description: When the user last viewed the file
+          nullable: true
+          example: "2023-05-16T14:22:45Z"
 
-      CreateUserRequest:
-        type: object
-        required: [username, password]
-        properties:
-          username:
-            type: string
-          password:
-            type: string
-          alias:
-            type: string
-          email:
-            type: string
-            format: email
-          is_admin:
-            type: boolean
-            default: false
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
 
-      UpdateAdminRequest:
-        type: object
-        properties:
-          username:
-            type: string
-            description: New username. Must be unique if provided.
-          password:
-            type: string
-            description: New password.
-          email:
-            type: string
-            format: email
-            nullable: true
-            description: New email. Provide an empty string to clear the email.
+    CreateUserRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        alias:
+          type: string
+        email:
+          type: string
+          format: email
+        is_admin:
+          type: boolean
+          default: false
+        notifyByEmail:
+          type: boolean
+          default: false
+        sendAuthByEmail:
+          type: boolean
+          default: false
 
-      UpdateUserRequest:
-        type: object
-        properties:
-          username:
-            type: string
-            description: New username. Must be unique if provided.
-          password:
-            type: string
-            description: New password.
-          alias:
-            type: string
-            description: New alias.
-          email:
-            type: string
-            format: email
-            nullable: true
-            description: New email. Provide an empty string to clear the email.
-          is_admin:
-            type: boolean
-            description: Whether the user should be an admin (Super Admin only)
+    UpdateAdminRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: New username. Must be unique if provided.
+        password:
+          type: string
+          description: New password.
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: New email. Provide an empty string to clear the email.
 
-      ResetPasswordRequest:
-        type: object
-        required: [password]
-        properties:
-          password:
-            type: string
+    UpdateUserNotifyRequest:
+      type: object
+      required:
+        - notifyByEmail
+      properties:
+        notifyByEmail:
+          type: boolean
 
-      AssignPermissionRequest:
-        type: object
-        required: [user_id, folder_prefix]
-        properties:
-          user_id:
-            type: string
-          folder_prefix:
-            type: string
+    ResetPasswordRequest:
+      type: object
+      required:
+        - password
+      properties:
+        password:
+          type: string
 
-      UpdatePermissionRequest:
-        type: object
-        required: [folder_prefix]
-        properties:
-          folder_prefix:
-            type: string
-            description: The new folder prefix for the permission
+    AssignPermissionRequest:
+      type: object
+      required:
+        - user_id
+        - folder_prefix
+      properties:
+        user_id:
+          type: string
+        folder_prefix:
+          type: string
 
-      CreateFolderRequest:
-        type: object
-        required: [folderPath]
-        properties:
-          folderPath:
-            type: string
-            description: The full path for the new folder, ending with a '/'.
-            example: "123/new_folder/"
+    CreateFolderRequest:
+      type: object
+      required:
+        - folderPath
+      properties:
+        folderPath:
+          type: string
+          description: The full path for the new folder, ending with a slash.
+          example: "123/new_folder/"
 
-      MoveItemsRequest:
-        type: object
-        required: [sources, destination]
-        properties:
-          sources:
-            type: array
-            items:
-              type: string
-            description: A list of source file keys or folder prefixes to move. Folders must end with a '/'.
-            example: ["123/documents/report.docx", "123/old_images/"]
-          destination:
+    MoveItemsRequest:
+      type: object
+      required:
+        - sources
+        - destination
+      properties:
+        sources:
+          type: array
+          description: List of file keys or folder prefixes to move. Folders must end with a slash.
+          items:
             type: string
-            description: The destination folder prefix. Must end with a '/'.
-            example: "123/new_location/"
+          example:
+            - "123/documents/report.docx"
+            - "123/old_images/"
+        destination:
+          type: string
+          description: Destination folder prefix. Must end with a slash.
+          example: "123/new_location/"
 
-      DeleteItemsRequest:
-        type: object
-        properties:
-          keys:
-            type: array
-            items:
-              type: string
-            description: A list of full file keys to delete.
-            example: ["123/documents/report.docx", "123/archive.zip"]
-          folders:
-            type: array
-            items:
-              type: string
-            description: A list of folder prefixes to delete recursively.
-            example: ["123/old_images/", "456/temp/"]
+    DeleteItemsRequest:
+      type: object
+      properties:
+        keys:
+          type: array
+          description: List of full file keys to delete.
+          items:
+            type: string
+          example:
+            - "123/documents/report.docx"
+            - "123/archive.zip"
+        folders:
+          type: array
+          description: List of folder prefixes to delete recursively.
+          items:
+            type: string
+          example:
+            - "123/old_images/"
+            - "456/temp/"
 
-      GenerateUploadURLRequest:
-        type: object
-        required: [fileName, contentType]
-        properties:
-          fileName:
-            type: string
-          contentType:
-            type: string
-            example: "image/jpeg"
-          prefix:
-            type: string
-            description: The folder path where the file will be uploaded.
-            example: "123/uploads/"
+    GenerateUploadURLRequest:
+      type: object
+      required:
+        - fileName
+        - contentType
+      properties:
+        fileName:
+          type: string
+        contentType:
+          type: string
+          example: "image/jpeg"
+        prefix:
+          type: string
+          description: The folder path where the file will be uploaded.
+          example: "123/uploads/"
 
-      ArchiveRequest:
-        type: object
-        properties:
-          keys:
-            type: array
-            items:
-              type: string
-            description: A list of full file keys to include in the archive.
-          folders:
-            type: array
-            items:
-              type: string
-            description: A list of folder prefixes. All files within these folders will be included.
-
-      UpdateFileRequest:
-        type: object
-        required: [newKey]
-        properties:
-          newKey:
+    ArchiveRequest:
+      type: object
+      properties:
+        keys:
+          type: array
+          description: List of full file keys to include in the archive.
+          items:
             type: string
-            description: The new file key to rename to
-
-      MoveFileRequest:
-        type: object
-        required: [source, destination]
-        properties:
-          source:
-            type: string
-            description: The current file key
-          destination:
-            type: string
-            description: The destination folder or new file key
-
-      CopyFileRequest:
-        type: object
-        required: [source, destination]
-        properties:
-          source:
-            type: string
-            description: The source file key
-          destination:
-            type: string
-            description: The destination folder or new file key
-
-      # Response Schemas
-      LoginSuccessResponse:
-        type: object
-        properties:
-          token:
-            type: string
-            description: JWT authentication token.
-
-      ListFilesResponse:
-        type: object
-        properties:
-          path:
-            type: string
-          folders:
-            type: array
-            items:
-              type: string
-          files:
-            type: array
-            items:
-              $ref: '#/components/schemas/FileInfo'
-
-      GenerateUploadURLResponse:
-        type: object
-        properties:
-          uploadUrl:
-            type: string
-            format: uri
-          objectKey:
+        folders:
+          type: array
+          description: List of folder prefixes to include recursively.
+          items:
             type: string
 
-      PresignResponse:
-        type: object
-        properties:
-          url:
-            type: string
-            format: uri
+    LoginSuccessResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT authentication token
 
-      ConvertedPathResponse:
-        type: object
-        properties:
-          convertedPath:
+    ListFilesResponse:
+      type: object
+      properties:
+        path:
+          type: string
+        folders:
+          type: array
+          items:
             type: string
-            description: Path for converted/read-only version of the file
-            example: "converted/123/documents/report.pdf"
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileInfo'
 
-      CreateUserResponse:
-        type: object
-        properties:
-          message:
-            type: string
-          user_id:
-            type: string
-          password:
-            type: string
-            description: The original password, returned for convenience.
+    GenerateUploadURLResponse:
+      type: object
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+        objectKey:
+          type: string
 
-      ResetPasswordResponse:
-        type: object
-        properties:
-          message:
-            type: string
-          password:
-            type: string
-            description: The new password, returned for convenience.
+    PresignResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
 
-      UpdateFileResponse:
-        type: object
-        properties:
-          message:
-            type: string
-            description: Success message
-          newKey:
-            type: string
-            description: The new file key after update/rename
+    ConvertedPathResponse:
+      type: object
+      properties:
+        convertedPath:
+          type: string
+          description: Path for converted/read-only version of the file
+          example: "converted/123/documents/report.pdf"
 
-      ListFoldersResponse:
-        type: object
-        properties:
-          folders:
-            type: array
-            items:
-              type: string
+    CreateUserResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user_id:
+          type: string
+        password:
+          type: string
+          description: The original password, returned for convenience
 
-      FolderDetails:
-        type: object
-        properties:
-          path:
-            type: string
-            description: The folder path
-          exists:
-            type: boolean
-            description: Whether the folder exists
-          itemCount:
-            type: integer
-            description: Number of items in the folder (files and subfolders)
+    ResetPasswordResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        password:
+          type: string
+          description: The new password, returned for convenience
 
-      ErrorResponse:
-        type: object
-        properties:
-          error:
-            type: string
-          details:
+    ListFoldersResponse:
+      type: object
+      properties:
+        folders:
+          type: array
+          items:
             type: string
 
-      SuccessMessage:
-        type: object
-        properties:
-          message:
-            type: string
+    GetArchiveStatusResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+        downloadUrl:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+
+    SuccessMessage:
+      type: object
+      properties:
+        message:
+          type: string
 
   responses:
     BadRequest:
@@ -1471,4 +1034,3 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/SuccessMessage'
-            

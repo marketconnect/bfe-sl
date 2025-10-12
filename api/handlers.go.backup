@@ -967,10 +967,9 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 					for _, u := range allUsersForAdmin {
 						userIDs = append(userIDs, u.ID)
 					}
-
 					var permsErr, logsErr error
 					wg := sync.WaitGroup{}
-					wg.Add(2)
+
 					go func() {
 						defer wg.Done()
 						allPermissionsForUsers, permsErr = h.Store.GetPermissionsForUsers(c.Request.Context(), userIDs)
@@ -1019,46 +1018,228 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 				}
 				createdAt := file.LastModified
 
-				fileInfo := models.FileInfo{
+				files = append(files, models.FileInfo{
 					Key:          file.Key,
 					CreatedAt:    &createdAt,
 					AccessType:   accessType,
 					LastViewedAt: lastViewedAt,
-				}
-
-				// --- Populate AccessList ---
-				var accessList []models.FileAccessInfo
-				for _, user := range allUsersForAdmin {
-					userPermissions, ok := allPermissionsForUsers[user.ID]
-					if !ok {
-						continue
-					}
-
-					hasAccess := false
-					for _, p := range userPermissions {
-						if p.FolderPrefix != nil && strings.HasPrefix(file.Key, *p.FolderPrefix) {
-							hasAccess = true
-							break
-						}
-					}
-
-					if hasAccess {
-						accessInfo := models.FileAccessInfo{
-							Username: user.Username,
-							Alias:    user.Alias,
-						}
-						if fileLogs, ok := allViewLogs[file.Key]; ok {
-							if viewTime, ok := fileLogs[user.ID]; ok {
-								vt := viewTime
-								accessInfo.LastViewedAt = &vt
-							}
-						}
-						accessList = append(accessList, accessInfo)
-					}
-				}
-				fileInfo.AccessList = accessList
-				files = append(files, fileInfo)
+				})
 			}
+
+			c.JSON(http.StatusOK, models.ListFilesResponse{
+				Path:    "/", // Path is still root
+				Folders: listOutput.Folders,
+				Files:   files,
+			})
+			return
+		}
+
+		// Superadmin and regular users see their assigned root folders
+		var rootFolders []string
+		for _, p := range permissions {
+			if p.FolderPrefix != nil {
+				rootFolders = append(rootFolders, *p.FolderPrefix)
+			}
+		}
+		c.JSON(http.StatusOK, models.ListFilesResponse{
+			Path:    "/",
+			Folders: rootFolders,
+			Files:   []models.FileInfo{},
+		})
+		return
+	}
+
+	if !strings.HasSuffix(requestedPath, "/") {
+		requestedPath += "/"
+	}
+
+	isAllowed := false
+	for _, p := range permissions {
+		if p.FolderPrefix != nil && strings.HasPrefix(requestedPath, *p.FolderPrefix) {
+			isAllowed = true
+			break
+		}
+	}
+	if !isAllowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	listOutput, err := h.S3Client.ListObjects(requestedPath, "/")
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list files from storage service", "details": err.Error()})
+		return
+	}
+
+	// --- Enrich files with metadata ---
+
+	// 1. Collect all paths for which we need metadata
+	fileKeys := make([]string, 0, len(listOutput.Files))
+	pathsToCheckSet := make(map[string]struct{})
+	for _, file := range listOutput.Files {
+		fileKeys = append(fileKeys, file.Key)
+		pathsToCheckSet[file.Key] = struct{}{}
+		currentPath := file.Key
+		for {
+			currentPath = path.Dir(currentPath)
+			if currentPath == "." || currentPath == "/" {
+				break
+			}
+			folderPath := currentPath + "/"
+			if _, exists := pathsToCheckSet[folderPath]; !exists {
+				pathsToCheckSet[folderPath] = struct{}{}
+			}
+		}
+	}
+	pathsToCheck := make([]string, 0, len(pathsToCheckSet))
+	for p := range pathsToCheckSet {
+		pathsToCheck = append(pathsToCheck, p)
+	}
+
+	// 2. Fetch metadata from DB in parallel
+	var filePerms map[string]string
+	var viewTimes map[string]time.Time
+	var permsErr, viewsErr error
+	// --- NEW: Admin-specific variables ---
+	var allUsersForAdmin []models.User
+	var allPermissionsForUsers map[uint64][]models.UserPermission
+	var allViewLogs map[string]map[uint64]time.Time
+	var adminDataErr error
+
+	wg := sync.WaitGroup{}
+	if len(pathsToCheck) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			filePerms, permsErr = h.Store.GetFilePermissions(c.Request.Context(), pathsToCheck)
+		}()
+	}
+	if len(fileKeys) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			viewTimes, viewsErr = h.Store.GetLastViewTimes(c.Request.Context(), userID, fileKeys)
+		}()
+		// --- NEW: Admin-specific fetch ---
+		if isAdmin {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				users, err := h.Store.GetAllUsers(c.Request.Context(), userID)
+				if err != nil {
+					adminDataErr = fmt.Errorf("failed to get users for admin: %w", err)
+					return
+				}
+				allUsersForAdmin = users
+
+				if len(allUsersForAdmin) == 0 {
+					return
+				}
+
+				userIDs := make([]uint64, 0, len(allUsersForAdmin))
+				for _, u := range allUsersForAdmin {
+					userIDs = append(userIDs, u.ID)
+				}
+
+				perms, err := h.Store.GetPermissionsForUsers(c.Request.Context(), userIDs)
+				if err != nil {
+					adminDataErr = fmt.Errorf("failed to get permissions for users: %w", err)
+					return
+				}
+				allPermissionsForUsers = perms
+
+				logs, err := h.Store.GetViewLogsForUsersAndFiles(c.Request.Context(), userIDs, fileKeys)
+				if err != nil {
+					adminDataErr = fmt.Errorf("failed to get view logs for users: %w", err)
+					return
+				}
+				allViewLogs = logs
+			}()
+		}
+	}
+	wg.Wait()
+
+	if permsErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": permsErr.Error()})
+		return
+	}
+	if viewsErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve view logs", "details": viewsErr.Error()})
+		return
+	}
+	// --- NEW: Check admin data error ---
+	if adminDataErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve admin data for access list", "details": adminDataErr.Error()})
+		return
+	}
+
+	// 3. Construct response
+	files := make([]models.FileInfo, 0, len(listOutput.Files))
+	for _, file := range listOutput.Files {
+		accessType := "read_and_download" // Default
+		if val, ok := filePerms[file.Key]; ok {
+			accessType = val
+		} else {
+			currentPath := file.Key
+			for {
+				currentPath = path.Dir(currentPath)
+				if currentPath == "." || currentPath == "/" {
+					break
+				}
+				folderPath := currentPath + "/"
+				if val, ok := filePerms[folderPath]; ok {
+					accessType = val
+					break
+				}
+			}
+		}
+
+		var lastViewedAt *time.Time
+		if vt, ok := viewTimes[file.Key]; ok {
+			lastViewedAt = &vt
+		}
+		createdAt := file.LastModified
+
+		fileInfo := models.FileInfo{
+			Key:          file.Key,
+			CreatedAt:    &createdAt,
+			AccessType:   accessType,
+			LastViewedAt: lastViewedAt,
+		}
+
+		// --- Populate AccessList ---
+		var accessList []models.FileAccessInfo
+		for _, user := range allUsersForAdmin {
+			userPermissions, ok := allPermissionsForUsers[user.ID]
+			if !ok {
+				continue
+			}
+
+			hasAccess := false
+			for _, p := range userPermissions {
+				if p.FolderPrefix != nil && strings.HasPrefix(file.Key, *p.FolderPrefix) {
+					hasAccess = true
+					break
+				}
+			}
+
+			if hasAccess {
+				accessInfo := models.FileAccessInfo{
+					Username: user.Username,
+					Alias:    user.Alias,
+				}
+				if fileLogs, ok := allViewLogs[file.Key]; ok {
+					if viewTime, ok := fileLogs[user.ID]; ok {
+						vt := viewTime
+						accessInfo.LastViewedAt = &vt
+					}
+				}
+				accessList = append(accessList, accessInfo)
+			}
+		}
+		fileInfo.AccessList = accessList
+		files = append(files, fileInfo)
+	}
 
 			c.JSON(http.StatusOK, models.ListFilesResponse{
 				Path:    "/", // Path is still root

@@ -30,12 +30,19 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type FileAccessInfo struct {
+	Username     string     `json:"username"`
+	Alias        *string    `json:"alias,omitempty"`
+	LastViewedAt *time.Time `json:"lastViewedAt"`
+}
+
 type FileInfo struct {
-	Key          string     `json:"key"`
-	URL          string     `json:"url,omitempty"`
-	CreatedAt    *time.Time `json:"createdAt,omitempty"`
-	AccessType   string     `json:"accessType,omitempty"` // "read_only", "read_and_download"
-	LastViewedAt *time.Time `json:"lastViewedAt,omitempty"`
+	Key          string           `json:"key"`
+	URL          string           `json:"url,omitempty"`
+	CreatedAt    *time.Time       `json:"createdAt,omitempty"`
+	AccessType   string           `json:"accessType,omitempty"` // "read_only", "read_and_download"
+	LastViewedAt *time.Time       `json:"lastViewedAt,omitempty"`
+	AccessList   []FileAccessInfo `json:"accessList,omitempty"`
 }
 
 type ListFilesResponse struct {

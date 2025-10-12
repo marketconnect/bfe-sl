@@ -1,0 +1,45 @@
+var lastViewedAt *time.Time
+		if vt, ok := viewTimes[file.Key]; ok {
+			lastViewedAt = &vt
+		}
+		createdAt := file.LastModified
+
+		fileInfo := models.FileInfo{
+			Key:          file.Key,
+			CreatedAt:    &createdAt,
+			AccessType:   accessType,
+			LastViewedAt: lastViewedAt,
+		}
+
+		// --- Populate AccessList ---
+		var accessList []models.FileAccessInfo
+		for _, user := range allUsersForAdmin {
+			userPermissions, ok := allPermissionsForUsers[user.ID]
+			if !ok {
+				continue
+			}
+
+			hasAccess := false
+			for _, p := range userPermissions {
+				if p.FolderPrefix != nil && strings.HasPrefix(file.Key, *p.FolderPrefix) {
+					hasAccess = true
+					break
+				}
+			}
+
+			if hasAccess {
+				accessInfo := models.FileAccessInfo{
+					Username: user.Username,
+					Alias:    user.Alias,
+				}
+				if fileLogs, ok := allViewLogs[file.Key]; ok {
+					if viewTime, ok := fileLogs[user.ID]; ok {
+						vt := viewTime
+						accessInfo.LastViewedAt = &vt
+					}
+				}
+				accessList = append(accessList, accessInfo)
+			}
+		}
+		fileInfo.AccessList = accessList
+		files = append(files, fileInfo)
