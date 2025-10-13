@@ -122,7 +122,7 @@ paths:
       tags:
         - File Management
       summary: Get a presigned URL for file download
-      description: Creates a temporary, secure URL to download a specific file. For read-only access, returns a convertedPath instead of a direct URL.
+      description: Creates a temporary, secure URL to download a specific file. For read-only access to PDF files, returns a status and array of pre-signed URLs for converted pages; for non-PDF read-only files, returns an error.
       security:
         - BearerAuth: []
       parameters:
@@ -134,15 +134,17 @@ paths:
             type: string
       responses:
         '200':
-          description: Presigned URL or converted path returned successfully.
+          description: Presigned URL, converted status, or converted path returned successfully.
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/PresignResponse'
-                  - $ref: '#/components/schemas/ConvertedPathResponse'
+                  - $ref: '#/components/schemas/ConvertedPagesResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -606,6 +608,36 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /admin/storage/permissions:
+    put:
+      tags:
+        - Admin - Storage Management
+      summary: Set permissions for files and folders
+      description: |-
+        Sets access permissions (read_only or read_and_download) for specified files and folders.
+        - Super Admin: Can set permissions for any item at any path.
+        - Admin: Can only set permissions for items within their own root directory.
+        - For folders, the permission applies to the folder itself and all files currently within it.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPermissionsRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -840,6 +872,28 @@ components:
           description: Destination folder prefix. Must end with a slash.
           example: "123/new_location/"
 
+    SetPermissionsRequest:
+      type: object
+      required:
+        - paths
+        - accessType
+      properties:
+        paths:
+          type: array
+          description: List of file keys or folder prefixes to set permissions for. Folders must end with a slash.
+          items:
+            type: string
+          example:
+            - "123/documents/report.pdf"
+            - "123/reports/"
+        accessType:
+          type: string
+          description: The access level to set for the specified paths
+          enum:
+            - read_only
+            - read_and_download
+          example: read_only
+
     DeleteItemsRequest:
       type: object
       properties:
@@ -935,6 +989,23 @@ components:
           description: Path for converted/read-only version of the file
           example: "converted/123/documents/report.pdf"
 
+    ConvertedPagesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Status of the conversion process
+          example: "converted"
+        pages:
+          type: array
+          description: Array of pre-signed URLs for individual pages as webp images
+          items:
+            type: string
+            format: uri
+          example:
+            - "https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-1.webp?X-Amz-Algorithm=..."
+            - "https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-2.webp?X-Amz-Algorithm=..."
+
     CreateUserResponse:
       type: object
       properties:
@@ -1018,6 +1089,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
       description: Conflict - The resource already exists or the request conflicts with the current state of the resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnsupportedMediaType:
+      description: Unsupported Media Type - Read-only view is only supported for PDF files
       content:
         application/json:
           schema:

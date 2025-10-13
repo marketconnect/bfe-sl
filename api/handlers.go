@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +21,7 @@ import (
 	"github.com/marketconnect/bfe-sl/db"
 	"github.com/marketconnect/bfe-sl/email"
 	"github.com/marketconnect/bfe-sl/models"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/marketconnect/bfe-sl/s3"
 
 	"github.com/gin-gonic/gin"
@@ -26,11 +29,12 @@ import (
 )
 
 type Handler struct {
-	Store       db.Store
-	S3Client    *s3.Client
-	EmailClient *email.Client
-	JwtSecret   string
-	PreSignTTL  time.Duration
+	Store               db.Store
+	S3Client            *s3.Client
+	EmailClient         *email.Client
+	JwtSecret           string
+	PreSignTTL          time.Duration
+	PdfToImagesFuncName string
 }
 
 // Auth Handlers
@@ -642,6 +646,59 @@ func (h *Handler) CopyStorageItemsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Items copied successfully"})
+}
+
+func (h *Handler) SetPermissionsHandler(c *gin.Context) {
+	var req models.SetPermissionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request", "details": err.Error()})
+		return
+	}
+
+	adminIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	adminID := adminIDVal.(uint64)
+
+	permissionsToSet := make(map[string]string)
+
+	// --- Authorization and Path Expansion ---
+	adminRootFolder := fmt.Sprintf("%d/", adminID)
+	for _, p := range req.Paths {
+		// Regular admins can only set permissions within their own root folder.
+		if adminID != 1 {
+			if !strings.HasPrefix(p, adminRootFolder) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied: you can only set permissions for items inside your own root folder", "item": p})
+				return
+			}
+		}
+
+		if strings.HasSuffix(p, "/") { // It's a folder
+			// We set the permission on the folder itself for hierarchical lookups for future files
+			permissionsToSet[p] = req.AccessType
+
+			// And on all files currently within it, as requested
+			files, err := h.S3Client.ListAllObjects(p)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "failed to list objects in folder", "folder": p, "details": err.Error()})
+				return
+			}
+			for _, fileKey := range files {
+				permissionsToSet[fileKey] = req.AccessType
+			}
+		} else { // It's a file
+			permissionsToSet[p] = req.AccessType
+		}
+	}
+
+	if err := h.Store.UpsertFilePermissions(c.Request.Context(), permissionsToSet); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set permissions in database", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "success"})
 }
 
 func (h *Handler) ListUsersHandler(c *gin.Context) {
@@ -1628,8 +1685,91 @@ func (h *Handler) PresignFileHandler(c *gin.Context) {
 		}
 
 		if accessType == "read_only" {
-			convertedPath := path.Join("converted", key)
-			c.JSON(http.StatusOK, gin.H{"convertedPath": convertedPath})
+			if !strings.HasSuffix(strings.ToLower(key), ".pdf") {
+				c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "read-only view is only supported for PDF files"})
+				return
+			}
+
+			outputPrefix := path.Join("converted", key) + "/"
+			manifestKey := path.Join(outputPrefix, "manifest.json")
+
+			var pageCount int
+
+			// 1. Check for cached manifest
+			manifestResp, err := h.S3Client.GetObject(manifestKey)
+			if err == nil {
+				// Manifest exists, parse it
+				log.Printf("Cache hit for converted file %s. Reading manifest.", key)
+				body, readErr := io.ReadAll(manifestResp.Body)
+				manifestResp.Body.Close()
+				if readErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read conversion manifest", "details": readErr.Error()})
+					return
+				}
+				var manifest struct {
+					PageCount int `json:"page_count"`
+				}
+				if jsonErr := json.Unmarshal(body, &manifest); jsonErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse conversion manifest", "details": jsonErr.Error()})
+					return
+				}
+				pageCount = manifest.PageCount
+				log.Printf("Manifest parsed for %s, pages: %d", key, pageCount)
+			} else {
+				var nsk *types.NoSuchKey
+				if errors.As(err, &nsk) {
+					// Manifest does not exist, invoke function
+					log.Printf("Cache miss for %s, invoking conversion function.", key)
+
+					count, invokeErr := h.invokePdfToImagesFunction(c.Request.Context(), key, outputPrefix)
+					if invokeErr != nil {
+						log.Printf("ERROR: PDF to images function invocation failed for key %s: %v", key, invokeErr)
+						c.JSON(http.StatusBadGateway, gin.H{"error": "failed to process file for viewing", "details": invokeErr.Error()})
+						return
+					}
+					pageCount = count
+				} else {
+					// Some other S3 error
+					log.Printf("ERROR: Failed to check for manifest s3://%s/%s: %v", h.S3Client.BucketName, manifestKey, err)
+					c.JSON(http.StatusBadGateway, gin.H{"error": "failed to check for converted file", "details": err.Error()})
+					return
+				}
+			}
+
+			if pageCount <= 0 {
+				c.JSON(http.StatusOK, gin.H{"status": "converted", "pages": []string{}})
+				return
+			}
+
+			// 3. Generate presigned URLs for pages
+			urls := make([]string, pageCount)
+			errs := make(chan error, pageCount)
+			var wg sync.WaitGroup
+
+			for i := 0; i < pageCount; i++ {
+				wg.Add(1)
+				go func(pageNum int) {
+					defer wg.Done()
+					imageKey := path.Join(outputPrefix, fmt.Sprintf("page-%d.webp", pageNum+1))
+					url, err := h.S3Client.GeneratePresignedURL(imageKey, h.PreSignTTL)
+					if err != nil {
+						errs <- fmt.Errorf("failed to sign url for page %d: %w", pageNum+1, err)
+						return
+					}
+					urls[pageNum] = url
+				}(i)
+			}
+			wg.Wait()
+			close(errs)
+
+			if len(errs) > 0 {
+				firstErr := <-errs
+				log.Printf("ERROR: Failed to generate one or more presigned URLs for converted file %s: %v", key, firstErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate URLs for file pages", "details": firstErr.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"status": "converted", "pages": urls})
 			return
 		}
 	}
@@ -1642,4 +1782,135 @@ func (h *Handler) PresignFileHandler(c *gin.Context) {
 
 	// Отдаём JSON {"url": "..."} (фронт завернёт через /s3proxy)
 	c.JSON(http.StatusOK, gin.H{"url": u})
+}
+
+type iamToken struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int64  `json:"expires_in"`
+	TokenType   string `json:"token_type"`
+}
+
+var (
+	cachedToken     string
+	tokenExpiration time.Time
+	tokenMutex      sync.Mutex
+)
+
+func (h *Handler) getIAMToken(ctx context.Context) (string, error) {
+	tokenMutex.Lock()
+	defer tokenMutex.Unlock()
+
+	if cachedToken != "" && time.Now().Before(tokenExpiration) {
+		return cachedToken, nil
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create metadata request: %w", err)
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to get IAM token from metadata service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("metadata service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var token iamToken
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		return "", fmt.Errorf("failed to decode IAM token: %w", err)
+	}
+
+	cachedToken = token.AccessToken
+	tokenExpiration = time.Now().Add(time.Duration(token.ExpiresIn-60) * time.Second)
+
+	return cachedToken, nil
+}
+
+type pdfConversionRequest struct {
+	PdfKey       string `json:"pdf_key"`
+	OutputPrefix string `json:"output_prefix"`
+}
+
+type pdfConversionResponse struct {
+	Status    string `json:"status"`
+	PageCount int    `json:"page_count"`
+	Format    string `json:"format"`
+	Message   string `json:"message"`
+}
+
+func (h *Handler) invokePdfToImagesFunction(ctx context.Context, pdfKey, outputPrefix string) (int, error) {
+	if h.PdfToImagesFuncName == "" {
+		return 0, errors.New("PDF to images function name is not configured")
+	}
+
+	iamToken, err := h.getIAMToken(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("could not get IAM token for function invocation: %w", err)
+	}
+
+	payload := pdfConversionRequest{
+		PdfKey:       pdfKey,
+		OutputPrefix: outputPrefix,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal function payload: %w", err)
+	}
+
+	client := &http.Client{Timeout: 45 * time.Second}
+	url := fmt.Sprintf("https://functions.yandexcloud.net/%s", h.PdfToImagesFuncName)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return 0, fmt.Errorf("failed to create function invocation request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+iamToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("function invocation failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read function response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("function returned non-200 status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var convResp pdfConversionResponse
+
+	var ycResponse struct {
+		StatusCode int    `json:"statusCode"`
+		Body       string `json:"body"`
+	}
+	if err := json.Unmarshal(body, &ycResponse); err == nil && ycResponse.StatusCode != 0 {
+		if ycResponse.StatusCode >= 300 {
+			return 0, fmt.Errorf("function returned error status %d in body: %s", ycResponse.StatusCode, ycResponse.Body)
+		}
+		if err := json.Unmarshal([]byte(ycResponse.Body), &convResp); err != nil {
+			return 0, fmt.Errorf("failed to unmarshal nested function response body: %w. Body was: %s", err, ycResponse.Body)
+		}
+	} else {
+		if err := json.Unmarshal(body, &convResp); err != nil {
+			return 0, fmt.Errorf("failed to unmarshal function response: %w. Body was: %s", err, string(body))
+		}
+	}
+
+	if convResp.Status != "success" {
+		return 0, fmt.Errorf("conversion function reported failure: %s", convResp.Message)
+	}
+
+	return convResp.PageCount, nil
 }

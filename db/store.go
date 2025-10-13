@@ -38,6 +38,7 @@ type Store interface {
 	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
 	GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error)
 	UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error
+	UpsertFilePermissions(ctx context.Context, permissions map[string]string) error
 }
 
 type YdbStore struct {
@@ -266,22 +267,26 @@ func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[
 
 		for res.NextResultSet(ctx) {
 			for res.NextRow() {
-				var path, accessType string
+				var path *string
+				var accessType *string
 				err = res.ScanNamed(
-					named.Required("path", &path),
-					named.Required("access_type", &accessType),
+					named.Optional("path", &path),
+					named.Optional("access_type", &accessType),
 				)
 				if err != nil {
 					return err
 				}
-				permissions[path] = accessType
+				if path != nil && accessType != nil {
+					permissions[*path] = *accessType
+				}
 			}
 		}
+
 		return res.Err()
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ydb query failed in GetFilePermissions: %w", err)
 	}
 	return permissions, nil
 }
@@ -877,6 +882,44 @@ func (s *YdbStore) UpdateArchiveJobStatus(ctx context.Context, jobID uint64, sta
 				table.ValueParam("$archive_key", types.NullableUTF8Value(&archiveKey)),
 				table.ValueParam("$error_message", types.NullableUTF8Value(&errorMessage)),
 				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
+			),
+		)
+		return err
+	})
+}
+
+func (s *YdbStore) UpsertFilePermissions(ctx context.Context, permissions map[string]string) error {
+	if len(permissions) == 0 {
+		return nil
+	}
+
+	query := `
+		DECLARE $permissionsData AS List<Struct<
+			path: Utf8,
+			access_type: Utf8
+		>>;
+
+		UPSERT INTO file_permissions
+		SELECT
+			path,
+			access_type
+		FROM AS_TABLE($permissionsData);
+	`
+
+	structs := make([]types.Value, 0, len(permissions))
+
+	for path, accessType := range permissions {
+		st := types.StructValue(
+			types.StructFieldValue("path", types.UTF8Value(path)),
+			types.StructFieldValue("access_type", types.UTF8Value(accessType)),
+		)
+		structs = append(structs, st)
+	}
+
+	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
+			table.NewQueryParameters(
+				table.ValueParam("$permissionsData", types.ListValue(structs...)),
 			),
 		)
 		return err

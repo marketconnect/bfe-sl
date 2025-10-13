@@ -42,11 +42,12 @@ func init() {
 	seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
-		Store:       store,
-		S3Client:    s3Client,
-		EmailClient: emailClient,
-		JwtSecret:   cfg.JWTSecretKey,
-		PreSignTTL:  time.Duration(cfg.PresignTTLSeconds) * time.Second,
+		Store:               store,
+		S3Client:            s3Client,
+		EmailClient:         emailClient,
+		JwtSecret:           cfg.JWTSecretKey,
+		PreSignTTL:          time.Duration(cfg.PresignTTLSeconds) * time.Second,
+		PdfToImagesFuncName: cfg.PdfToImagesFuncName,
 	}
 
 	router = gin.New()
@@ -117,6 +118,7 @@ func init() {
 				adminRoutes.POST("/storage/move", handler.MoveStorageItemsHandler)
 				adminRoutes.POST("/storage/copy", handler.CopyStorageItemsHandler)
 				adminRoutes.DELETE("/storage/items", handler.DeleteStorageItemsHandler)
+				adminRoutes.PUT("/storage/permissions", handler.SetPermissionsHandler)
 			}
 		}
 	}
@@ -124,6 +126,12 @@ func init() {
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	router.ServeHTTP(w, r)
+}
+
+func main() {
+	port := config.Load().ServerPort
+	log.Printf("Server starting on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, router))
 }
 
 func seedAdminUser(ctx context.Context, store db.Store, cfg *config.Config) {

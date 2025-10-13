@@ -131,3 +131,8 @@ type MoveItemsRequest struct {
 	Sources     []string `json:"sources" binding:"required"`
 	Destination string   `json:"destination" binding:"required"`
 }
+
+type SetPermissionsRequest struct {
+	Paths      []string `json:"paths" binding:"required"`
+	AccessType string   `json:"accessType" binding:"required,oneof=read_only read_and_download"`
+}
