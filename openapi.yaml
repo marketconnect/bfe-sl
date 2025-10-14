@@ -1,5 +1,4 @@
 openapi: 3.1.0
-
 info:
   title: BFE-SL File Management API
   description: |-
@@ -8,11 +7,9 @@ info:
     - Admin: Can create non-admin users, manage their own folder, and assign permissions to their users within that folder.
     - User: Can access files and folders they have been granted permission to.
   version: 1.0.0
-
 servers:
   - url: /api/v1
     description: API version 1
-
 tags:
   - name: Authentication
     description: User login and token generation
@@ -26,7 +23,6 @@ tags:
     description: Admin-only endpoints for managing S3 folders
   - name: Admin - Self Management
     description: Endpoint for an admin to update their own account details
-
 paths:
   /auth/login:
     post:
@@ -53,7 +49,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /files:
     get:
       tags:
@@ -86,13 +81,13 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /files/generate-upload-url:
     post:
       tags:
         - File Management
       summary: Generate a presigned URL for file upload
-      description: Creates a temporary, secure URL to upload a file directly to storage. The user must have permission to the target prefix.
+      description: Creates a temporary, secure URL to upload a file directly to storage.
+        The user must have permission to the target prefix.
       security:
         - BearerAuth: []
       requestBody:
@@ -116,13 +111,15 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /files/presign:
     get:
       tags:
         - File Management
       summary: Get a presigned URL for file download
-      description: Creates a temporary, secure URL to download a specific file. For read-only access to PDF files, returns a status and array of pre-signed URLs for converted pages; for non-PDF read-only files, returns an error.
+      description: Creates a temporary, secure URL to download a specific file. For
+        read-only access to PDF files, returns a status and array of pre-signed
+        URLs for converted pages; for non-PDF read-only files, returns an
+        error.
       security:
         - BearerAuth: []
       parameters:
@@ -134,7 +131,8 @@ paths:
             type: string
       responses:
         '200':
-          description: Presigned URL, converted status, or converted path returned successfully.
+          description: Presigned URL, converted status, or converted path returned
+            successfully.
           content:
             application/json:
               schema:
@@ -151,13 +149,13 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /archive:
     post:
       tags:
         - File Management
       summary: Download multiple files or folders as a zip archive
-      description: Creates and streams a zip archive containing the specified files and folders. The user must have permission for all requested items.
+      description: Creates and streams a zip archive containing the specified files
+        and folders. The user must have permission for all requested items.
       security:
         - BearerAuth: []
       requestBody:
@@ -180,13 +178,13 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-
   /archive/status/{jobId}:
     get:
       tags:
         - File Management
       summary: Get archive job status
-      description: Retrieves the status and optional download URL for a background archive job.
+      description: Retrieves the status and optional download URL for a background
+        archive job.
       security:
         - BearerAuth: []
       parameters:
@@ -212,13 +210,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/self:
     put:
       tags:
         - Admin - Self Management
       summary: Update own admin account
-      description: Allows an authenticated admin to update their own username, password, or email.
+      description: Allows an authenticated admin to update their own username, password,
+        or email.
       security:
         - BearerAuth: []
       requestBody:
@@ -238,7 +236,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/users:
     get:
       tags:
@@ -298,7 +295,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/users/{id}:
     delete:
       tags:
@@ -331,8 +327,9 @@ paths:
     put:
       tags:
         - Admin - User Management
-      summary: Update a user's notification preference
-      description: Updates the notifyByEmail setting for a user created by the admin.
+      summary: Update a user's notification settings and email
+      description: Updates the `notifyByEmail` setting and the email address for a
+        user. The email field is required when making this request.
       security:
         - BearerAuth: []
       parameters:
@@ -361,7 +358,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/users/{id}/password:
     post:
       tags:
@@ -388,7 +384,8 @@ paths:
               $ref: '#/components/schemas/ResetPasswordRequest'
       responses:
         '200':
-          description: Password reset successfully. The new password is returned for convenience.
+          description: Password reset successfully. The new password is returned for
+            convenience.
           content:
             application/json:
               schema:
@@ -401,7 +398,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/permissions:
     post:
       tags:
@@ -430,7 +426,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/permissions/{id}:
     delete:
       tags:
@@ -457,7 +452,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/storage/folders:
     get:
       tags:
@@ -509,7 +503,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/storage/move:
     post:
       tags:
@@ -542,7 +535,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/storage/copy:
     post:
       tags:
@@ -578,7 +570,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/storage/items:
     delete:
       tags:
@@ -607,7 +598,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
   /admin/storage/permissions:
     put:
       tags:
@@ -637,14 +627,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
-
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-
   schemas:
     User:
       type: object
@@ -652,7 +640,7 @@ components:
         id:
           type: string
           description: Unique identifier for the user
-          example: "15958461734691702294"
+          example: '15958461734691702294'
         createdAt:
           type: string
           format: date-time
@@ -682,25 +670,25 @@ components:
           type: string
           description: The ID of the admin who created this user.
           nullable: true
-          example: "1"
-
+          example: '1'
     FileInfo:
       type: object
       properties:
         key:
           type: string
           description: The file key/path in storage
-          example: "123/documents/report.pdf"
+          example: 123/documents/report.pdf
         url:
           type: string
-          description: Optional URL for the file; typically empty, use /files/presign to get a download URL
+          description: Optional URL for the file; typically empty, use /files/presign
+            to get a download URL
           nullable: true
         createdAt:
           type: string
           format: date-time
           description: When the file was created/first uploaded
           nullable: true
-          example: "2023-05-15T10:30:00Z"
+          example: '2023-05-15T10:30:00Z'
         accessType:
           type: string
           description: The access level for the file
@@ -714,7 +702,7 @@ components:
           format: date-time
           description: When the file was last accessed by this user
           nullable: true
-          example: "2023-05-16T14:22:45Z"
+          example: '2023-05-16T14:22:45Z'
         accessList:
           type: array
           description: List of users who have access to this file (admin only)
@@ -722,10 +710,9 @@ components:
             $ref: '#/components/schemas/FileAccessInfo'
           nullable: true
           example:
-            - username: "john_doe"
-              alias: "John"
-              lastViewedAt: "2023-05-16T14:22:45Z"
-
+            - username: john_doe
+              alias: John
+              lastViewedAt: '2023-05-16T14:22:45Z'
     UserPermission:
       type: object
       properties:
@@ -743,27 +730,25 @@ components:
           type: string
         folderPrefix:
           type: string
-          example: "15958461734691702294/"
-
+          example: 15958461734691702294/
     FileAccessInfo:
       type: object
       properties:
         username:
           type: string
           description: The username of the user who has access to the file
-          example: "john_doe"
+          example: john_doe
         alias:
           type: string
           description: The alias of the user (if set)
           nullable: true
-          example: "John"
+          example: John
         lastViewedAt:
           type: string
           format: date-time
           description: When the user last viewed the file
           nullable: true
-          example: "2023-05-16T14:22:45Z"
-
+          example: '2023-05-16T14:22:45Z'
     LoginRequest:
       type: object
       required:
@@ -775,7 +760,6 @@ components:
         password:
           type: string
           format: password
-
     CreateUserRequest:
       type: object
       required:
@@ -800,7 +784,6 @@ components:
         sendAuthByEmail:
           type: boolean
           default: false
-
     UpdateAdminRequest:
       type: object
       properties:
@@ -815,15 +798,17 @@ components:
           format: email
           nullable: true
           description: New email. Provide an empty string to clear the email.
-
     UpdateUserNotifyRequest:
       type: object
       required:
         - notifyByEmail
+        - email
       properties:
         notifyByEmail:
           type: boolean
-
+        email:
+          type: string
+          format: email
     ResetPasswordRequest:
       type: object
       required:
@@ -831,7 +816,6 @@ components:
       properties:
         password:
           type: string
-
     AssignPermissionRequest:
       type: object
       required:
@@ -842,7 +826,6 @@ components:
           type: string
         folder_prefix:
           type: string
-
     CreateFolderRequest:
       type: object
       required:
@@ -851,8 +834,7 @@ components:
         folderPath:
           type: string
           description: The full path for the new folder, ending with a slash.
-          example: "123/new_folder/"
-
+          example: 123/new_folder/
     MoveItemsRequest:
       type: object
       required:
@@ -861,17 +843,17 @@ components:
       properties:
         sources:
           type: array
-          description: List of file keys or folder prefixes to move. Folders must end with a slash.
+          description: List of file keys or folder prefixes to move. Folders must
+            end with a slash.
           items:
             type: string
           example:
-            - "123/documents/report.docx"
-            - "123/old_images/"
+            - 123/documents/report.docx
+            - 123/old_images/
         destination:
           type: string
           description: Destination folder prefix. Must end with a slash.
-          example: "123/new_location/"
-
+          example: 123/new_location/
     SetPermissionsRequest:
       type: object
       required:
@@ -880,12 +862,13 @@ components:
       properties:
         paths:
           type: array
-          description: List of file keys or folder prefixes to set permissions for. Folders must end with a slash.
+          description: List of file keys or folder prefixes to set permissions for.
+            Folders must end with a slash.
           items:
             type: string
           example:
-            - "123/documents/report.pdf"
-            - "123/reports/"
+            - 123/documents/report.pdf
+            - 123/reports/
         accessType:
           type: string
           description: The access level to set for the specified paths
@@ -893,7 +876,6 @@ components:
             - read_only
             - read_and_download
           example: read_only
-
     DeleteItemsRequest:
       type: object
       properties:
@@ -903,17 +885,16 @@ components:
           items:
             type: string
           example:
-            - "123/documents/report.docx"
-            - "123/archive.zip"
+            - 123/documents/report.docx
+            - 123/archive.zip
         folders:
           type: array
           description: List of folder prefixes to delete recursively.
           items:
             type: string
           example:
-            - "123/old_images/"
-            - "456/temp/"
-
+            - 123/old_images/
+            - 456/temp/
     GenerateUploadURLRequest:
       type: object
       required:
@@ -924,12 +905,11 @@ components:
           type: string
         contentType:
           type: string
-          example: "image/jpeg"
+          example: image/jpeg
         prefix:
           type: string
           description: The folder path where the file will be uploaded.
-          example: "123/uploads/"
-
+          example: 123/uploads/
     ArchiveRequest:
       type: object
       properties:
@@ -943,14 +923,12 @@ components:
           description: List of folder prefixes to include recursively.
           items:
             type: string
-
     LoginSuccessResponse:
       type: object
       properties:
         token:
           type: string
           description: JWT authentication token
-
     ListFilesResponse:
       type: object
       properties:
@@ -964,7 +942,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileInfo'
-
     GenerateUploadURLResponse:
       type: object
       properties:
@@ -973,29 +950,26 @@ components:
           format: uri
         objectKey:
           type: string
-
     PresignResponse:
       type: object
       properties:
         url:
           type: string
           format: uri
-
     ConvertedPathResponse:
       type: object
       properties:
         convertedPath:
           type: string
           description: Path for converted/read-only version of the file
-          example: "converted/123/documents/report.pdf"
-
+          example: converted/123/documents/report.pdf
     ConvertedPagesResponse:
       type: object
       properties:
         status:
           type: string
           description: Status of the conversion process
-          example: "converted"
+          example: converted
         pages:
           type: array
           description: Array of pre-signed URLs for individual pages as webp images
@@ -1003,9 +977,8 @@ components:
             type: string
             format: uri
           example:
-            - "https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-1.webp?X-Amz-Algorithm=..."
-            - "https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-2.webp?X-Amz-Algorithm=..."
-
+            - https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-1.webp?X-Amz-Algorithm=...
+            - https://storage.yandexcloud.net/bucket/converted/123/document.pdf/page-2.webp?X-Amz-Algorithm=...
     CreateUserResponse:
       type: object
       properties:
@@ -1016,7 +989,6 @@ components:
         password:
           type: string
           description: The original password, returned for convenience
-
     ResetPasswordResponse:
       type: object
       properties:
@@ -1025,7 +997,6 @@ components:
         password:
           type: string
           description: The new password, returned for convenience
-
     ListFoldersResponse:
       type: object
       properties:
@@ -1033,7 +1004,6 @@ components:
           type: array
           items:
             type: string
-
     GetArchiveStatusResponse:
       type: object
       properties:
@@ -1047,7 +1017,6 @@ components:
         error:
           type: string
           nullable: true
-
     ErrorResponse:
       type: object
       properties:
@@ -1055,16 +1024,15 @@ components:
           type: string
         details:
           type: string
-
     SuccessMessage:
       type: object
       properties:
         message:
           type: string
-
   responses:
     BadRequest:
-      description: Bad Request - The request was improperly formatted or contained invalid data
+      description: Bad Request - The request was improperly formatted or contained
+        invalid data
       content:
         application/json:
           schema:
@@ -1076,7 +1044,8 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: Forbidden - The authenticated user does not have permission to perform this action
+      description: Forbidden - The authenticated user does not have permission to
+        perform this action
       content:
         application/json:
           schema:
@@ -1088,13 +1057,15 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
-      description: Conflict - The resource already exists or the request conflicts with the current state of the resource
+      description: Conflict - The resource already exists or the request conflicts
+        with the current state of the resource
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     UnsupportedMediaType:
-      description: Unsupported Media Type - Read-only view is only supported for PDF files
+      description: Unsupported Media Type - Read-only view is only supported for
+        PDF files
       content:
         application/json:
           schema:

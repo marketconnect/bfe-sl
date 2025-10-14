@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/marketconnect/bfe-sl/auth"
 	"github.com/marketconnect/bfe-sl/db"
 	"github.com/marketconnect/bfe-sl/email"
 	"github.com/marketconnect/bfe-sl/models"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/marketconnect/bfe-sl/s3"
 
 	"github.com/gin-gonic/gin"
@@ -815,7 +815,7 @@ func (h *Handler) UpdateUserNotifyHandler(c *gin.Context) {
 		return
 	}
 
-	if err := h.Store.UpdateUserNotifyByEmail(c.Request.Context(), userID, req.NotifyByEmail); err != nil {
+	if err := h.Store.UpdateUserNotifyByEmail(c.Request.Context(), userID, req.NotifyByEmail, req.Email); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user notification setting", "details": err.Error()})
 		return
 	}

@@ -27,7 +27,7 @@ type Store interface {
 	GetAllUsers(ctx context.Context, adminID uint64) ([]models.User, error)
 	AssignPermission(ctx context.Context, permission *models.UserPermission) error
 	UpdateUserPassword(ctx context.Context, userID uint64, passwordHash string) error
-	UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error
+	UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool, email string) error
 	RevokePermission(ctx context.Context, permissionID uint64) error
 	GetUserPermissions(ctx context.Context, userID uint64) ([]models.UserPermission, error)
 	GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error)
@@ -735,14 +735,15 @@ func (s *YdbStore) UpdateUserPassword(ctx context.Context, userID uint64, passwo
 	})
 }
 
-func (s *YdbStore) UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool) error {
+func (s *YdbStore) UpdateUserNotifyByEmail(ctx context.Context, userID uint64, notify bool, email string) error {
 	query := `
 		DECLARE $id AS Uint64;
 		DECLARE $notify_by_email AS Bool;
+		DECLARE $email AS Utf8;
 		DECLARE $updated_at AS Timestamp;
 
 		UPDATE users
-		SET notify_by_email = $notify_by_email, updated_at = $updated_at
+		SET notify_by_email = $notify_by_email, email = $email, updated_at = $updated_at
 		WHERE id = $id;
 	`
 	ts := time.Now()
@@ -751,6 +752,7 @@ func (s *YdbStore) UpdateUserNotifyByEmail(ctx context.Context, userID uint64, n
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(userID)),
 				table.ValueParam("$notify_by_email", types.BoolValue(notify)),
+				table.ValueParam("$email", types.UTF8Value(email)),
 				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)

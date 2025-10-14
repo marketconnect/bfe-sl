@@ -77,7 +77,8 @@ type UpdateAdminRequest struct {
 }
 
 type UpdateUserNotifyRequest struct {
-	NotifyByEmail bool `json:"notifyByEmail"`
+	NotifyByEmail bool   `json:"notifyByEmail"`
+	Email         string `json:"email" binding:"required"`
 }
 
 type ArchiveRequest struct {
