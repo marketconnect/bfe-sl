@@ -1705,6 +1705,7 @@ func (h *Handler) invokePdfToImagesFunction(ctx context.Context, pdfKey, outputP
 }
 
 func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
+
 	// Authenticate user
 	userIDVal, exists := c.Get("userID")
 	if !exists {
@@ -1790,6 +1791,7 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 				folderPath := parent + "/"
 				pathsToCheck[folderPath] = struct{}{}
 				currentPath = parent
+				log.Printf("DEBUG: Checking folder %s for access\n", folderPath)
 			}
 		}
 		// Convert the map to a slice for the database query
@@ -1807,10 +1809,11 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 		// ---> ШАГ 3: Check permissions for each file
 		for key := range allKeys {
 			isReadOnly := false
-
+			log.Printf("DEBUG: Checking file %s for access\n", key)
 			// Check the file itself
 			if accessType, ok := filePerms[key]; ok && accessType == "read_only" {
 				isReadOnly = true
+				log.Printf("DEBUG: File %s is read-only\n", key)
 			}
 
 			// Check the parent folders
