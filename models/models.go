@@ -101,28 +101,6 @@ type GenerateUploadURLResponse struct {
 	ObjectKey string `json:"objectKey"`
 }
 
-type ArchiveJob struct {
-	ID           uint64    `json:"id,string"`
-	UserID       uint64    `json:"userId,string"`
-	Status       string    `json:"status"` // PENDING, PROCESSING, COMPLETED, FAILED
-	ArchiveKey   *string   `json:"archiveKey,omitempty"`
-	ErrorMessage *string   `json:"errorMessage,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-}
-
-type RequestArchiveResponse struct {
-	JobID  uint64 `json:"jobId,string"`
-	Status string `json:"status"`
-}
-
-type GetArchiveStatusResponse struct {
-	JobID       uint64 `json:"jobId,string"`
-	Status      string `json:"status"`
-	DownloadURL string `json:"downloadUrl,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
-
 type DeleteItemsRequest struct {
 	Keys    []string `json:"keys"`
 	Folders []string `json:"folders"`
@@ -136,4 +114,8 @@ type MoveItemsRequest struct {
 type SetPermissionsRequest struct {
 	Paths      []string `json:"paths" binding:"required"`
 	AccessType string   `json:"accessType" binding:"required,oneof=read_only read_and_download"`
+}
+
+type PresignFilesResponse struct {
+	URLs map[string]string `json:"urls"`
 }

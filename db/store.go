@@ -35,9 +35,6 @@ type Store interface {
 	GetLastViewTimes(ctx context.Context, userID uint64, fileKeys []string) (map[string]time.Time, error)
 	GetPermissionsForUsers(ctx context.Context, userIDs []uint64) (map[uint64][]models.UserPermission, error)
 	GetViewLogsForUsersAndFiles(ctx context.Context, userIDs []uint64, fileKeys []string) (map[string]map[uint64]time.Time, error)
-	CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error
-	GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error)
-	UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error
 	UpsertFilePermissions(ctx context.Context, permissions map[string]string) error
 }
 
@@ -581,54 +578,6 @@ func (s *YdbStore) GetAllUsers(ctx context.Context, adminID uint64) ([]models.Us
 	return users, nil
 }
 
-func (s *YdbStore) GetArchiveJob(ctx context.Context, jobID uint64) (*models.ArchiveJob, error) {
-	var job models.ArchiveJob
-	var found bool
-
-	query := `
-		DECLARE $id AS Uint64;
-		SELECT id, user_id, status, archive_key, error_message, created_at, updated_at
-		FROM archive_jobs
-		WHERE id = $id;
-	`
-	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
-			table.NewQueryParameters(
-				table.ValueParam("$id", types.Uint64Value(jobID)),
-			),
-		)
-		if err != nil {
-			return err
-		}
-		defer res.Close()
-
-		if res.NextResultSet(ctx) && res.NextRow() {
-			found = true
-			err := res.Scan(
-				&job.ID,
-				&job.UserID,
-				&job.Status,
-				&job.ArchiveKey,
-				&job.ErrorMessage,
-				&job.CreatedAt,
-				&job.UpdatedAt,
-			)
-			if err != nil {
-				return err
-			}
-		}
-		return res.Err()
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("ydb query failed: %w", err)
-	}
-	if !found {
-		return nil, ErrNotFound
-	}
-	return &job, nil
-}
-
 func (s *YdbStore) CreateUser(ctx context.Context, user *models.User) error {
 	if user.ID == 0 {
 		id, err := newID()
@@ -823,67 +772,6 @@ func (s *YdbStore) RevokePermission(ctx context.Context, permissionID uint64) er
 		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
 			table.NewQueryParameters(
 				table.ValueParam("$id", types.Uint64Value(permissionID)),
-			),
-		)
-		return err
-	})
-}
-
-func (s *YdbStore) CreateArchiveJob(ctx context.Context, job *models.ArchiveJob) error {
-	id, err := newID()
-	if err != nil {
-		return err
-	}
-	job.ID = id
-	ts := time.Now()
-	job.CreatedAt = ts
-	job.UpdatedAt = ts
-
-	query := `
-		DECLARE $id AS Uint64;
-		DECLARE $user_id AS Uint64;
-		DECLARE $status AS Utf8;
-		DECLARE $created_at AS Timestamp;
-		DECLARE $updated_at AS Timestamp;
-
-		UPSERT INTO archive_jobs (id, user_id, status, created_at, updated_at)
-		VALUES ($id, $user_id, $status, $created_at, $updated_at);
-	`
-	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
-			table.NewQueryParameters(
-				table.ValueParam("$id", types.Uint64Value(job.ID)),
-				table.ValueParam("$user_id", types.Uint64Value(job.UserID)),
-				table.ValueParam("$status", types.UTF8Value(job.Status)),
-				table.ValueParam("$created_at", types.TimestampValueFromTime(ts)),
-				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
-			),
-		)
-		return err
-	})
-}
-
-func (s *YdbStore) UpdateArchiveJobStatus(ctx context.Context, jobID uint64, status, archiveKey, errorMessage string) error {
-	ts := time.Now()
-	query := `
-		DECLARE $id AS Uint64;
-		DECLARE $status AS Utf8;
-		DECLARE $archive_key AS Utf8;
-		DECLARE $error_message AS Utf8;
-		DECLARE $updated_at AS Timestamp;
-
-		UPDATE archive_jobs
-		SET status = $status, archive_key = $archive_key, error_message = $error_message, updated_at = $updated_at
-		WHERE id = $id;
-	`
-	return s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
-		_, _, err := session.Execute(ctx, table.DefaultTxControl(), query,
-			table.NewQueryParameters(
-				table.ValueParam("$id", types.Uint64Value(jobID)),
-				table.ValueParam("$status", types.UTF8Value(status)),
-				table.ValueParam("$archive_key", types.NullableUTF8Value(&archiveKey)),
-				table.ValueParam("$error_message", types.NullableUTF8Value(&errorMessage)),
-				table.ValueParam("$updated_at", types.TimestampValueFromTime(ts)),
 			),
 		)
 		return err

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -1340,74 +1339,6 @@ func (h *Handler) ListFilesHandler(c *gin.Context) {
 	})
 }
 
-func (h *Handler) createArchiveAsync(ctx context.Context, job *models.ArchiveJob, req models.ArchiveRequest) {
-	// Update job status to PROCESSING
-	if err := h.Store.UpdateArchiveJobStatus(ctx, job.ID, "PROCESSING", "", ""); err != nil {
-		log.Printf("Failed to update job %d to PROCESSING: %v", job.ID, err)
-		return
-	}
-
-	// Create the archive
-	archiveKey := fmt.Sprintf("archives/%d/%d.zip", job.UserID, job.ID)
-
-	// Create a buffer to hold the zip data
-	var buf bytes.Buffer
-	zipWriter := zip.NewWriter(&buf)
-
-	allKeys := make(map[string]struct{})
-
-	for _, key := range req.Keys {
-		allKeys[key] = struct{}{}
-	}
-
-	for _, folderPrefix := range req.Folders {
-		files, err := h.S3Client.ListAllObjects(folderPrefix)
-		if err != nil {
-			log.Printf("Error listing objects for prefix %s: %v", folderPrefix, err)
-			continue
-		}
-		for _, file := range files {
-			allKeys[file] = struct{}{}
-		}
-	}
-
-	for key := range allKeys {
-		obj, err := h.S3Client.GetObject(key)
-		if err != nil {
-			log.Printf("Error getting object %s: %v", key, err)
-			continue
-		}
-
-		f, err := zipWriter.Create(key)
-		if err != nil {
-			obj.Body.Close()
-			log.Printf("Error creating zip entry for %s: %v", key, err)
-			continue
-		}
-
-		if _, err := io.Copy(f, obj.Body); err != nil {
-			log.Printf("Error copying object body for %s: %v", key, err)
-		}
-		obj.Body.Close()
-	}
-
-	zipWriter.Close()
-
-	// Upload the archive to S3
-	if err := h.S3Client.UploadObject(archiveKey, &buf); err != nil {
-		log.Printf("Failed to upload archive %s: %v", archiveKey, err)
-		if updateErr := h.Store.UpdateArchiveJobStatus(ctx, job.ID, "FAILED", "", err.Error()); updateErr != nil {
-			log.Printf("Failed to update job %d to FAILED: %v", job.ID, updateErr)
-		}
-		return
-	}
-
-	// Update job status to COMPLETED
-	if err := h.Store.UpdateArchiveJobStatus(ctx, job.ID, "COMPLETED", archiveKey, ""); err != nil {
-		log.Printf("Failed to update job %d to COMPLETED: %v", job.ID, err)
-	}
-}
-
 func (h *Handler) GenerateUploadURLHandler(c *gin.Context) {
 	userIDVal, exists := c.Get("userID")
 	if !exists {
@@ -1472,149 +1403,6 @@ func (h *Handler) GenerateUploadURLHandler(c *gin.Context) {
 		UploadURL: url,
 		ObjectKey: objectKey,
 	})
-}
-
-func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
-	userIDVal, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-	userID := userIDVal.(uint64)
-
-	var req models.ArchiveRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
-		return
-	}
-
-	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
-		return
-	}
-
-	isAllowed := func(path string) bool {
-		for _, p := range permissions {
-			if strings.HasPrefix(path, *p.FolderPrefix) {
-				return true
-			}
-		}
-		return false
-	}
-
-	for _, key := range req.Keys {
-		if !isAllowed(key) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to file: " + key})
-			return
-		}
-	}
-	for _, folder := range req.Folders {
-		if !isAllowed(folder) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to folder: " + folder})
-			return
-		}
-	}
-
-	// --- Логика архивации ---
-	c.Header("Content-Type", "application/zip")
-	c.Header("Content-Disposition", "attachment; filename=archive.zip")
-	zipWriter := zip.NewWriter(c.Writer)
-	defer zipWriter.Close()
-
-	allKeys := make(map[string]struct{})
-
-	for _, key := range req.Keys {
-		allKeys[key] = struct{}{}
-	}
-
-	for _, folderPrefix := range req.Folders {
-		files, err := h.S3Client.ListAllObjects(folderPrefix)
-		if err != nil {
-			log.Printf("Error listing objects for prefix %s: %v", folderPrefix, err)
-			continue
-		}
-		for _, file := range files {
-			allKeys[file] = struct{}{}
-		}
-	}
-
-	for key := range allKeys {
-		// Log the view for each file included in the archive
-		if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
-			log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
-			// Do not fail the download, just log the error
-		}
-		obj, err := h.S3Client.GetObject(key)
-		if err != nil {
-			log.Printf("Error getting object %s: %v", key, err)
-			continue
-		}
-
-		f, err := zipWriter.Create(key)
-		if err != nil {
-			obj.Body.Close()
-			log.Printf("Error creating zip entry for %s: %v", key, err)
-			continue
-		}
-
-		if _, err := io.Copy(f, obj.Body); err != nil {
-			log.Printf("Error copying object body for %s: %v", key, err)
-		}
-		obj.Body.Close()
-	}
-}
-
-func (h *Handler) GetArchiveStatusHandler(c *gin.Context) {
-	userIDVal, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-	userID := userIDVal.(uint64)
-
-	jobIDStr := c.Param("jobId")
-	jobID, err := strconv.ParseUint(jobIDStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job ID"})
-		return
-	}
-
-	job, err := h.Store.GetArchiveJob(c.Request.Context(), jobID)
-	if err != nil {
-		if err == db.ErrNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "archive job not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve job status", "details": err.Error()})
-		return
-	}
-
-	// Ensure user can only access their own jobs
-	if job.UserID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
-		return
-	}
-
-	response := models.GetArchiveStatusResponse{
-		JobID:  job.ID,
-		Status: job.Status,
-		Error:  *job.ErrorMessage,
-	}
-
-	if job.Status == "COMPLETED" {
-
-		url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, h.PreSignTTL)
-		// url, err := h.S3Client.GeneratePresignedURL(*job.ArchiveKey, 30*time.Second)
-		if err != nil {
-			log.Printf("Failed to generate presigned URL for completed archive %s: %v", *job.ArchiveKey, err)
-			// Don't fail the whole request, just omit the URL
-		} else {
-			response.DownloadURL = url
-		}
-	}
-
-	c.JSON(http.StatusOK, response)
 }
 
 func (h *Handler) PresignFileHandler(c *gin.Context) {
@@ -1913,4 +1701,154 @@ func (h *Handler) invokePdfToImagesFunction(ctx context.Context, pdfKey, outputP
 	}
 
 	return convResp.PageCount, nil
+}
+
+func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	userID := userIDVal.(uint64)
+
+	isAdminVal, _ := c.Get("isAdmin")
+	isAdmin := isAdminVal.(bool)
+
+	var req models.ArchiveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
+		return
+	}
+
+	isAllowed := func(path string) bool {
+		for _, p := range permissions {
+			if p.FolderPrefix != nil && strings.HasPrefix(path, *p.FolderPrefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Собираем уникальный список всех ключей файлов
+	allKeys := make(map[string]struct{})
+
+	// Проверяем права и добавляем отдельные файлы
+	for _, key := range req.Keys {
+		if !isAllowed(key) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to file: " + key})
+			return
+		}
+		allKeys[key] = struct{}{}
+	}
+
+	// Проверяем права на папки и добавляем все файлы из них
+	for _, folder := range req.Folders {
+		if !isAllowed(folder) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to folder: " + folder})
+			return
+		}
+		filesInFolder, err := h.S3Client.ListAllObjects(folder)
+		if err != nil {
+			log.Printf("Error listing objects for prefix %s: %v", folder, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list files in folder", "details": err.Error()})
+			return
+		}
+		for _, file := range filesInFolder {
+			allKeys[file] = struct{}{}
+		}
+	}
+
+	finalKeys := make([]string, 0, len(allKeys))
+
+	// Если пользователь не админ и есть файлы для проверки
+	if !isAdmin && len(allKeys) > 0 {
+		// ---> ШАГ 1: Собираем все пути для проверки (файлы + все их родительские папки)
+		pathsToCheck := make(map[string]struct{})
+		for key := range allKeys {
+			pathsToCheck[key] = struct{}{}
+			currentPath := key
+			// Идем вверх по директориям
+			for {
+				// path.Dir отрезает последний элемент. "a/b/c.txt" -> "a/b"
+				parent := path.Dir(currentPath)
+				if parent == "." || parent == "/" || parent == "" {
+					break
+				}
+				// Добавляем слэш в конце, чтобы соответствовать формату хранения папок
+				folderPath := parent + "/"
+				pathsToCheck[folderPath] = struct{}{}
+				currentPath = parent
+			}
+		}
+		// Конвертируем map в слайс для запроса
+		keysToCheckSlice := make([]string, 0, len(pathsToCheck))
+		for p := range pathsToCheck {
+			keysToCheckSlice = append(keysToCheckSlice, p)
+		}
+		// ---> ШАГ 2: Делаем один запрос в БД
+		filePerms, err := h.Store.GetFilePermissions(c.Request.Context(), keysToCheckSlice)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
+			return
+		}
+
+		// ---> ШАГ 3: Проверяем каждый файл иерархически
+		for key := range allKeys {
+			isReadOnly := false
+
+			// Проверяем сам файл
+			if accessType, ok := filePerms[key]; ok && accessType == "read_only" {
+				isReadOnly = true
+			}
+
+			// Если для файла нет явного запрета, проверяем родительские папки
+			if !isReadOnly {
+				currentPath := key
+				for {
+					parent := path.Dir(currentPath)
+					if parent == "." || parent == "/" || parent == "" {
+						break
+					}
+					folderPath := parent + "/"
+					if accessType, ok := filePerms[folderPath]; ok && accessType == "read_only" {
+						isReadOnly = true
+						break // Нашли запрет выше по иерархии, дальше можно не искать
+					}
+					currentPath = parent
+				}
+			}
+
+			// Если после всех проверок запрета не найдено, добавляем ключ в итоговый список
+			if !isReadOnly {
+				finalKeys = append(finalKeys, key)
+			}
+		}
+	} else {
+		// Админ может скачивать все
+		for key := range allKeys {
+			finalKeys = append(finalKeys, key)
+		}
+	}
+
+	// ---> Генерируем ссылки только для отфильтрованного списка `finalKeys`
+	urls := make(map[string]string)
+	for _, key := range finalKeys {
+		if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
+			log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
+		}
+		url, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTL)
+		if err != nil {
+			log.Printf("Error generating presigned URL for key %s: %v", key, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate URL for a file", "file": key})
+			return
+		}
+		urls[key] = url
+	}
+	c.JSON(http.StatusOK, models.PresignFilesResponse{URLs: urls})
 }
