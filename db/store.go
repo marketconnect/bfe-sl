@@ -232,6 +232,8 @@ func (s *YdbStore) GetUserPermissions(ctx context.Context, userID uint64) ([]mod
 	return permissions, nil
 }
 
+// db/store.go
+
 func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error) {
 	if len(paths) == 0 {
 		return make(map[string]string), nil
@@ -239,22 +241,33 @@ func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[
 
 	permissions := make(map[string]string)
 
-	pathList := make([]types.Value, len(paths))
-	for i, p := range paths {
-		pathList[i] = types.UTF8Value(p)
+	// ---> Step 1: Create a table in a memory(slice) to pass to the database
+	rows := make([]types.Value, 0, len(paths))
+	for _, p := range paths {
+		rows = append(rows, types.StructValue(
+			types.StructFieldValue("path_to_check", types.UTF8Value(p)),
+		))
 	}
 
-	query := `
-		DECLARE $paths AS List<Utf8>;
+	// ---> Step 2: Defina a data type for the table
+	tempTableData := types.ListValue(rows...)
 
-		SELECT path, access_type
-		FROM file_permissions
-		WHERE path IN $paths;
+	// ---> Step 3: Write a query to get file permissions
+	query := `
+		DECLARE $paths_to_check AS List<Struct<path_to_check: Utf8>>;
+
+		SELECT
+			t1.path AS path,
+			t1.access_type AS access_type
+		FROM file_permissions AS t1
+		INNER JOIN AS_TABLE($paths_to_check) AS t2
+		ON t1.path = t2.path_to_check;
 	`
 	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
 		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
 			table.NewQueryParameters(
-				table.ValueParam("$paths", types.ListValue(pathList...)),
+				// ---> Step 4: Pass the table to the database
+				table.ValueParam("$paths_to_check", tempTableData),
 			),
 		)
 		if err != nil {
@@ -266,6 +279,7 @@ func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[
 			for res.NextRow() {
 				var path *string
 				var accessType *string
+				// Columns names `path` and `access_type` from SELECT
 				err = res.ScanNamed(
 					named.Optional("path", &path),
 					named.Optional("access_type", &accessType),
@@ -287,6 +301,62 @@ func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[
 	}
 	return permissions, nil
 }
+
+// func (s *YdbStore) GetFilePermissions(ctx context.Context, paths []string) (map[string]string, error) {
+// 	if len(paths) == 0 {
+// 		return make(map[string]string), nil
+// 	}
+
+// 	permissions := make(map[string]string)
+
+// 	pathList := make([]types.Value, len(paths))
+// 	for i, p := range paths {
+// 		pathList[i] = types.UTF8Value(p)
+// 	}
+
+// 	query := `
+// 		DECLARE $paths AS List<Utf8>;
+
+// 		SELECT path, access_type
+// 		FROM file_permissions
+// 		WHERE path IN $paths;
+// 	`
+// 	err := s.Driver.Table().Do(ctx, func(ctx context.Context, session table.Session) error {
+// 		_, res, err := session.Execute(ctx, table.DefaultTxControl(), query,
+// 			table.NewQueryParameters(
+// 				table.ValueParam("$paths", types.ListValue(pathList...)),
+// 			),
+// 		)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		defer res.Close()
+
+// 		for res.NextResultSet(ctx) {
+// 			for res.NextRow() {
+// 				var path *string
+// 				var accessType *string
+// 				err = res.ScanNamed(
+// 					named.Optional("path", &path),
+// 					named.Optional("access_type", &accessType),
+// 				)
+// 				if err != nil {
+// 					return err
+// 				}
+// 				if path != nil && accessType != nil {
+// 					permissions[*path] = *accessType
+// 				}
+// 			}
+// 		}
+
+// 		return res.Err()
+// 	})
+
+// 	if err != nil {
+// 		return nil, fmt.Errorf("ydb query failed in GetFilePermissions: %w", err)
+// 	}
+// 	return permissions, nil
+// }
 
 func (s *YdbStore) LogFileView(ctx context.Context, userID uint64, fileKey string) error {
 	query := `

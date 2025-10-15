@@ -42,12 +42,13 @@ func init() {
 	seedAdminUser(ctx, store, cfg)
 
 	handler := &api.Handler{
-		Store:               store,
-		S3Client:            s3Client,
-		EmailClient:         emailClient,
-		JwtSecret:           cfg.JWTSecretKey,
-		PreSignTTL:          time.Duration(cfg.PresignTTLSeconds) * time.Second,
-		PdfToImagesFuncName: cfg.PdfToImagesFuncName,
+		Store:                store,
+		S3Client:             s3Client,
+		EmailClient:          emailClient,
+		JwtSecret:            cfg.JWTSecretKey,
+		PreSignTTL:           time.Duration(cfg.PresignTTLSeconds) * time.Second,
+		PreSignTTLForArchive: time.Duration(cfg.PreSignTTLForArchive) * time.Second,
+		PdfToImagesFuncName:  cfg.PdfToImagesFuncName,
 	}
 
 	router = gin.New()

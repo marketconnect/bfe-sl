@@ -28,12 +28,13 @@ import (
 )
 
 type Handler struct {
-	Store               db.Store
-	S3Client            *s3.Client
-	EmailClient         *email.Client
-	JwtSecret           string
-	PreSignTTL          time.Duration
-	PdfToImagesFuncName string
+	Store                db.Store
+	S3Client             *s3.Client
+	EmailClient          *email.Client
+	JwtSecret            string
+	PreSignTTL           time.Duration
+	PreSignTTLForArchive time.Duration
+	PdfToImagesFuncName  string
 }
 
 // Auth Handlers
@@ -1704,6 +1705,7 @@ func (h *Handler) invokePdfToImagesFunction(ctx context.Context, pdfKey, outputP
 }
 
 func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
+	// Authenticate user
 	userIDVal, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -1714,18 +1716,21 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 	isAdminVal, _ := c.Get("isAdmin")
 	isAdmin := isAdminVal.(bool)
 
+	// Parse request body
 	var req models.ArchiveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
 
+	// Get user permissions
 	permissions, err := h.Store.GetUserPermissions(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve permissions"})
 		return
 	}
 
+	// define a function to check if a path is allowed
 	isAllowed := func(path string) bool {
 		for _, p := range permissions {
 			if p.FolderPrefix != nil && strings.HasPrefix(path, *p.FolderPrefix) {
@@ -1735,10 +1740,10 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 		return false
 	}
 
-	// Собираем уникальный список всех ключей файлов
+	// Collect a unique list of all file keys from all requested directories and files
 	allKeys := make(map[string]struct{})
 
-	// Проверяем права и добавляем отдельные файлы
+	// Check permissions for individual files and add them to the list allKeys
 	for _, key := range req.Keys {
 		if !isAllowed(key) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to file: " + key})
@@ -1747,7 +1752,7 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 		allKeys[key] = struct{}{}
 	}
 
-	// Проверяем права на папки и добавляем все файлы из них
+	// Check permissions for folders and add all files from them to the list allKeys
 	for _, folder := range req.Folders {
 		if !isAllowed(folder) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to folder: " + folder})
@@ -1766,48 +1771,49 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 
 	finalKeys := make([]string, 0, len(allKeys))
 
-	// Если пользователь не админ и есть файлы для проверки
+	// if a user is not an admin and there are files to check
+	// then we need to check permissions for each file since any of them can be a read-only file
 	if !isAdmin && len(allKeys) > 0 {
-		// ---> ШАГ 1: Собираем все пути для проверки (файлы + все их родительские папки)
+		// ---> Step 1: Collect all paths for checking (files + all their parent folders)
 		pathsToCheck := make(map[string]struct{})
 		for key := range allKeys {
 			pathsToCheck[key] = struct{}{}
 			currentPath := key
-			// Идем вверх по директориям
+			// Go up the directory hierarchy
 			for {
-				// path.Dir отрезает последний элемент. "a/b/c.txt" -> "a/b"
+				// path.Dir removes the last element. "a/b/c.txt" -> "a/b"
 				parent := path.Dir(currentPath)
 				if parent == "." || parent == "/" || parent == "" {
 					break
 				}
-				// Добавляем слэш в конце, чтобы соответствовать формату хранения папок
+				// add a slash to the end to match the folder storage format
 				folderPath := parent + "/"
 				pathsToCheck[folderPath] = struct{}{}
 				currentPath = parent
 			}
 		}
-		// Конвертируем map в слайс для запроса
+		// Convert the map to a slice for the database query
 		keysToCheckSlice := make([]string, 0, len(pathsToCheck))
 		for p := range pathsToCheck {
 			keysToCheckSlice = append(keysToCheckSlice, p)
 		}
-		// ---> ШАГ 2: Делаем один запрос в БД
+		// ---> Step 2: Make one database query
 		filePerms, err := h.Store.GetFilePermissions(c.Request.Context(), keysToCheckSlice)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not retrieve file permissions", "details": err.Error()})
 			return
 		}
 
-		// ---> ШАГ 3: Проверяем каждый файл иерархически
+		// ---> ШАГ 3: Check permissions for each file
 		for key := range allKeys {
 			isReadOnly := false
 
-			// Проверяем сам файл
+			// Check the file itself
 			if accessType, ok := filePerms[key]; ok && accessType == "read_only" {
 				isReadOnly = true
 			}
 
-			// Если для файла нет явного запрета, проверяем родительские папки
+			// Check the parent folders
 			if !isReadOnly {
 				currentPath := key
 				for {
@@ -1818,31 +1824,31 @@ func (h *Handler) DownloadArchiveHandler(c *gin.Context) {
 					folderPath := parent + "/"
 					if accessType, ok := filePerms[folderPath]; ok && accessType == "read_only" {
 						isReadOnly = true
-						break // Нашли запрет выше по иерархии, дальше можно не искать
+						break // Checked the parent folder, no need to check further
 					}
 					currentPath = parent
 				}
 			}
 
-			// Если после всех проверок запрета не найдено, добавляем ключ в итоговый список
+			// If no read-only access found, add the file to the final list
 			if !isReadOnly {
 				finalKeys = append(finalKeys, key)
 			}
 		}
 	} else {
-		// Админ может скачивать все
+		// Admin can download all files
 		for key := range allKeys {
 			finalKeys = append(finalKeys, key)
 		}
 	}
 
-	// ---> Генерируем ссылки только для отфильтрованного списка `finalKeys`
+	// ---> Generate presigned URLs for the filtered list of files `finalKeys`
 	urls := make(map[string]string)
 	for _, key := range finalKeys {
 		if err := h.Store.LogFileView(c.Request.Context(), userID, key); err != nil {
 			log.Printf("WARN: Failed to log file view for user %d, key %s: %v", userID, key, err)
 		}
-		url, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTL)
+		url, err := h.S3Client.GeneratePresignedURL(key, h.PreSignTTLForArchive)
 		if err != nil {
 			log.Printf("Error generating presigned URL for key %s: %v", key, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate URL for a file", "file": key})

@@ -10,26 +10,27 @@ import (
 )
 
 type Config struct {
-	ServerPort          string
-	YDBEndpoint         string
-	YDBDatabasePath     string
-	JWTSecretKey        string
-	S3Endpoint          string
-	S3Region            string
-	S3BucketName        string
-	S3AccessKeyID       string
-	S3SecretAccessKey   string
-	AdminUser           string
-	AdminPassword       string
-	OriginURL           string
-	PresignTTLSeconds   int
-	SESEndpoint         string
-	SESRegion           string
-	SESAccessKeyID      string
-	SESSecretAccessKey  string
-	EmailFrom           string
-	AppLoginURL         string
-	PdfToImagesFuncName string
+	ServerPort           string
+	YDBEndpoint          string
+	YDBDatabasePath      string
+	JWTSecretKey         string
+	S3Endpoint           string
+	S3Region             string
+	S3BucketName         string
+	S3AccessKeyID        string
+	S3SecretAccessKey    string
+	AdminUser            string
+	AdminPassword        string
+	OriginURL            string
+	PresignTTLSeconds    int
+	PreSignTTLForArchive int
+	SESEndpoint          string
+	SESRegion            string
+	SESAccessKeyID       string
+	SESSecretAccessKey   string
+	EmailFrom            string
+	AppLoginURL          string
+	PdfToImagesFuncName  string
 }
 
 func Load() *Config {
@@ -48,26 +49,27 @@ func Load() *Config {
 	}
 
 	return &Config{
-		ServerPort:          getEnv("SERVER_PORT", "8080"),
-		YDBEndpoint:         getEnv("YDB_ENDPOINT", ""),
-		YDBDatabasePath:     getEnv("YDB_DATABASE_PATH", ""),
-		JWTSecretKey:        getEnv("JWT_SECRET_KEY", ""),
-		S3Endpoint:          s3Endpoint,
-		S3Region:            getEnv("S3_REGION", "ru-central1"),
-		S3BucketName:        getEnv("S3_BUCKET_NAME", ""),
-		S3AccessKeyID:       getEnv("S3_ACCESS_KEY_ID", ""),
-		S3SecretAccessKey:   getEnv("S3_SECRET_ACCESS_KEY", ""),
-		AdminUser:           getEnv("ADMIN_USER", "admin"),
-		AdminPassword:       getEnv("ADMIN_PASSWORD", ""),
-		OriginURL:           getEnv("ORIGIN_URL", "http://localhost:8080"),
-		PresignTTLSeconds:   getEnvInt("PRESIGN_TTL_SECONDS", 45, 10, 3600),
-		SESEndpoint:         getEnv("SES_ENDPOINT", "https://email.cloud.yandex.net"),
-		SESRegion:           getEnv("SES_REGION", "ru-central1"),
-		SESAccessKeyID:      getEnv("SES_ACCESS_KEY_ID", ""),
-		SESSecretAccessKey:  getEnv("SES_SECRET_ACCESS_KEY", ""),
-		EmailFrom:           getEnv("EMAIL_FROM", ""),
-		AppLoginURL:         getEnv("APP_LOGIN_URL", ""),
-		PdfToImagesFuncName: getEnv("PDF_TO_IMAGES_FUNC_NAME", ""),
+		ServerPort:           getEnv("SERVER_PORT", "8080"),
+		YDBEndpoint:          getEnv("YDB_ENDPOINT", ""),
+		YDBDatabasePath:      getEnv("YDB_DATABASE_PATH", ""),
+		JWTSecretKey:         getEnv("JWT_SECRET_KEY", ""),
+		S3Endpoint:           s3Endpoint,
+		S3Region:             getEnv("S3_REGION", "ru-central1"),
+		S3BucketName:         getEnv("S3_BUCKET_NAME", ""),
+		S3AccessKeyID:        getEnv("S3_ACCESS_KEY_ID", ""),
+		S3SecretAccessKey:    getEnv("S3_SECRET_ACCESS_KEY", ""),
+		AdminUser:            getEnv("ADMIN_USER", "admin"),
+		AdminPassword:        getEnv("ADMIN_PASSWORD", ""),
+		OriginURL:            getEnv("ORIGIN_URL", "http://localhost:8080"),
+		PresignTTLSeconds:    getEnvInt("PRESIGN_TTL_SECONDS", 45, 10, 3600),
+		PreSignTTLForArchive: getEnvInt("PRESIGN_TTL_FOR_ARCHIVE_SECONDS", 60, 10, 3600),
+		SESEndpoint:          getEnv("SES_ENDPOINT", "https://email.cloud.yandex.net"),
+		SESRegion:            getEnv("SES_REGION", "ru-central1"),
+		SESAccessKeyID:       getEnv("SES_ACCESS_KEY_ID", ""),
+		SESSecretAccessKey:   getEnv("SES_SECRET_ACCESS_KEY", ""),
+		EmailFrom:            getEnv("EMAIL_FROM", ""),
+		AppLoginURL:          getEnv("APP_LOGIN_URL", ""),
+		PdfToImagesFuncName:  getEnv("PDF_TO_IMAGES_FUNC_NAME", ""),
 	}
 }
 
