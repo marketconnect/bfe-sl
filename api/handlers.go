@@ -365,14 +365,36 @@ func (h *Handler) DeleteStorageItemsHandler(c *gin.Context) {
 		keysToDelete[folder] = struct{}{}
 	}
 
-	var keySlice []string
+	var originalKeySlice []string
+	var filesToCheckForConversion []string
 	for k := range keysToDelete {
-		keySlice = append(keySlice, k)
+		originalKeySlice = append(originalKeySlice, k)
+		// We only look for converted versions of files, not folders (which end with "/")
+		if !strings.HasSuffix(k, "/") {
+			filesToCheckForConversion = append(filesToCheckForConversion, k)
+		}
 	}
-
-	if err := h.S3Client.DeleteObjects(keySlice); err != nil {
+	// First, delete the original items. If this fails, we stop and report the error.
+	if err := h.S3Client.DeleteObjects(originalKeySlice); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete one or more items from storage", "details": err.Error()})
 		return
+	}
+	// If original item deletion was successful, proceed to find and delete any associated converted files.
+	// Errors in this phase are logged but do not fail the overall request.
+	var convertedKeysToDelete []string
+	for _, key := range filesToCheckForConversion {
+		convertedPrefix := "converted/" + key + "/"
+		convertedObjects, err := h.S3Client.ListAllKeysUnderPrefix(convertedPrefix)
+		if err != nil {
+			log.Printf("WARN: Failed to list converted items for deleted key %s. They may need to be manually removed. Error: %v", key, err)
+			continue
+		}
+		convertedKeysToDelete = append(convertedKeysToDelete, convertedObjects...)
+	}
+	if len(convertedKeysToDelete) > 0 {
+		if err := h.S3Client.DeleteObjects(convertedKeysToDelete); err != nil {
+			log.Printf("WARN: Original items deleted, but failed to delete associated converted items. Keys: %v. Error: %v", convertedKeysToDelete, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "items deleted successfully"})
@@ -1653,7 +1675,7 @@ func (h *Handler) invokePdfToImagesFunction(ctx context.Context, pdfKey, outputP
 		return 0, fmt.Errorf("failed to marshal function payload: %w", err)
 	}
 
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := &http.Client{Timeout: h.PreSignTTLForArchive * time.Second}
 	url := fmt.Sprintf("https://functions.yandexcloud.net/%s", h.PdfToImagesFuncName)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payloadBytes))
